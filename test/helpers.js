@@ -62,4 +62,16 @@ function createContext({ params = {}, routes = {}, binary, downloads = {} } = {}
 	return context;
 }
 
-module.exports = { createContext, HttpError, CREDENTIALS };
+/** Fake transport for URL downloads: { url: { status, body, headers } }. Records each GET in calls. */
+function makeFetcher(downloads, calls) {
+	const { Readable } = require('node:stream');
+	return async (url) => {
+		const key = url.toString();
+		calls.push({ method: 'GET', download: key });
+		const file = downloads[key];
+		if (!file) return { statusCode: 404, headers: {}, body: Readable.from([]) };
+		return { statusCode: file.status, headers: file.headers || {}, body: Readable.from(file.body ? [file.body] : []) };
+	};
+}
+
+module.exports = { createContext, makeFetcher, HttpError, CREDENTIALS };

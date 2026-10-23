@@ -11,10 +11,12 @@ const {
 	buildMultipart,
 	describeZelliaError,
 } = require('../dist/nodes/Zellia/GenericFunctions.js');
-const { createContext, HttpError } = require('./helpers');
+const { createContext, makeFetcher, HttpError } = require('./helpers');
+const { setFetcher } = require('../dist/nodes/Zellia/actions/download.js');
 
 async function execute(params, routes, extra = {}) {
 	const context = createContext({ params, routes, ...extra });
+	setFetcher(makeFetcher(extra.downloads || {}, context.calls));
 	const output = await new Zellia().execute.call(context);
 	return { items: output[0].map((item) => item.json), calls: context.calls };
 }
@@ -230,10 +232,7 @@ describe('attachments', () => {
 				[final]: { status: 200, body: Buffer.from('IMG'), headers: { 'content-type': 'image/png' } },
 			},
 		});
-		assert.deepEqual(calls.filter((call) => call.download).map((call) => [call.download, call.noRedirect]), [
-			[first, true],
-			[final, true],
-		]);
+		assert.deepEqual(calls.filter((call) => call.download).map((call) => call.download), [first, final]);
 		assert.match(calls.at(-1).body.toString(), /filename="real.png"/);
 	});
 
@@ -281,6 +280,28 @@ describe('attachments', () => {
 			execute({ ...base, fileSource: 'url', fileUrl: url }, route, { downloads: { [url]: { status: 304 } } }),
 			/HTTP 304 without a new address/,
 		);
+	});
+
+	test('a name that switches to a private IP between the check and the connection is refused', async () => {
+		const download = require('../dist/nodes/Zellia/actions/download.js');
+		const http = require('node:http');
+		// The real transport, so the connect-time lookup runs
+		download.setFetcher();
+		const server = http.createServer((req, res) => res.end('SECRET'));
+		await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const port = server.address().port;
+		let lookups = 0;
+		// First answer (the early check) is public, the second (at connect time) is the local server
+		download.setHostResolver(async () => (++lookups === 1 ? ['93.184.216.34'] : ['127.0.0.1']));
+		try {
+			const context = createContext({ params: { ...base, fileSource: 'url', fileUrl: `http://rebind.test:${port}/x` }, routes: route });
+			await assert.rejects(new Zellia().execute.call(context), /private or local address/);
+			assert.equal(lookups, 2);
+			assert.equal(context.calls.length, 0);
+		} finally {
+			server.close();
+			download.setHostResolver(async () => ['93.184.216.34']);
+		}
 	});
 
 	test('a binary field still works as before', async () => {

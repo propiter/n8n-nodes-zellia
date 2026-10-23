@@ -1,13 +1,20 @@
-import { promises as dns } from 'dns';
+import type { LookupAddress, LookupOptions } from 'dns';
+import { lookup as dnsLookup } from 'dns';
+import * as http from 'http';
+import type { IncomingHttpHeaders } from 'http';
+import * as https from 'https';
 import type { Readable } from 'stream';
 
-import type { IExecuteFunctions, IN8nHttpFullResponse } from 'n8n-workflow';
+import type { IExecuteFunctions } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 
 // Zellia rejects uploads above MAXIMUM_FILE_UPLOAD_SIZE, 40 MB by default
 export const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024;
 
 const MAX_REDIRECTS = 3;
+
+// One budget for the whole download, redirects and body included
+const DOWNLOAD_DEADLINE_MS = 30000;
 
 const MIME_BY_EXTENSION: Record<string, string> = {
 	jpg: 'image/jpeg',
@@ -32,7 +39,12 @@ export interface DownloadedFile {
 export type HostResolver = (hostname: string) => Promise<string[]>;
 
 const defaultResolver: HostResolver = async (hostname) =>
-	(await dns.lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+	await new Promise((resolve, reject) => {
+		dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+			if (error) reject(error);
+			else resolve((addresses as LookupAddress[]).map((entry) => entry.address));
+		});
+	});
 
 let resolveHost: HostResolver = defaultResolver;
 
@@ -41,7 +53,72 @@ export function setHostResolver(resolver?: HostResolver): void {
 	resolveHost = resolver ?? defaultResolver;
 }
 
-function headerValue(headers: IN8nHttpFullResponse['headers'] | undefined, name: string): string {
+class BlockedAddressError extends Error {
+	constructor() {
+		super('The file URL points to a private or local address');
+	}
+}
+
+/**
+ * DNS lookup for the socket itself: it checks the addresses at connect time and hands the
+ * socket only checked ones, so a name cannot switch to a private IP after the check.
+ */
+function safeLookup(
+	hostname: string,
+	options: LookupOptions,
+	callback: (error: Error | null, address: string | LookupAddress[], family?: number) => void,
+): void {
+	resolveHost(hostname).then(
+		(addresses) => {
+			if (!addresses.length || addresses.some((address) => isBlockedIp(address))) {
+				callback(new BlockedAddressError(), '');
+				return;
+			}
+			const entries = addresses.map((address) => ({
+				address,
+				family: address.includes(':') ? 6 : 4,
+			}));
+			if (options.all) callback(null, entries);
+			else callback(null, entries[0].address, entries[0].family);
+		},
+		(error: Error) => callback(error, ''),
+	);
+}
+
+export interface FetchResponse {
+	statusCode: number;
+	headers: IncomingHttpHeaders | Record<string, string>;
+	body: Readable;
+}
+
+/** Sends one GET without following redirects. Replaceable in tests. */
+export type Fetcher = (url: URL, timeoutMs: number) => Promise<FetchResponse>;
+
+const defaultFetcher: Fetcher = async (url, timeoutMs) =>
+	await new Promise((resolve, reject) => {
+		const client = url.protocol === 'https:' ? https : http;
+		const request = client.get(
+			url,
+			{ lookup: safeLookup, headers: { 'user-agent': 'n8n-nodes-zellia', accept: '*/*' } },
+			(response) =>
+				resolve({
+					statusCode: response.statusCode ?? 0,
+					headers: response.headers,
+					body: response,
+				}),
+		);
+		request.setTimeout(timeoutMs, () => request.destroy(new Error('timeout')));
+		request.on('error', reject);
+	});
+
+let fetchUrl: Fetcher = defaultFetcher;
+
+/** Test hook: swap the HTTP transport. Pass nothing to restore the real one. */
+export function setFetcher(fetcher?: Fetcher): void {
+	fetchUrl = fetcher ?? defaultFetcher;
+}
+
+function headerValue(headers: FetchResponse['headers'] | undefined, name: string): string {
 	const value = headers?.[name] ?? headers?.[name.toLowerCase()];
 	return String(Array.isArray(value) ? value[0] : (value ?? ''));
 }
@@ -215,28 +292,45 @@ async function assertAllowedUrl(this: IExecuteFunctions, rawUrl: string, i: numb
 }
 
 /** Reads a response stream, stopping as soon as it passes the size limit. */
-async function readLimited(this: IExecuteFunctions, stream: Readable, i: number): Promise<Buffer> {
+async function readLimited(
+	this: IExecuteFunctions,
+	stream: Readable,
+	i: number,
+	deadline: number,
+): Promise<Buffer> {
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of stream) {
-		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
-		size += buffer.length;
-		if (size > MAX_ATTACHMENT_BYTES) {
-			stream.destroy();
-			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
-				itemIndex: i,
-				description: 'Zellia does not accept attachments above 40 MB.',
-			});
+	const timer = setTimeout(
+		() => stream.destroy(new Error('timeout')),
+		Math.max(0, deadline - Date.now()),
+	);
+	try {
+		for await (const chunk of stream) {
+			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+			size += buffer.length;
+			if (size > MAX_ATTACHMENT_BYTES) {
+				stream.destroy();
+				throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
+					itemIndex: i,
+					description: 'Zellia does not accept attachments above 40 MB.',
+				});
+			}
+			chunks.push(buffer);
 		}
-		chunks.push(buffer);
+	} catch (error) {
+		// The size error is already a NodeOperationError; re-wrapping returns the same instance
+		if (error instanceof NodeOperationError) throw new NodeOperationError(this.getNode(), error);
+		throw new NodeOperationError(
+			this.getNode(),
+			'Could not download the file (it took too long or the connection failed)',
+			{
+				itemIndex: i,
+			},
+		);
+	} finally {
+		clearTimeout(timer);
 	}
 	return Buffer.concat(chunks);
-}
-
-function toStream(body: unknown): Readable | undefined {
-	return body && typeof (body as Readable)[Symbol.asyncIterator] === 'function'
-		? (body as Readable)
-		: undefined;
 }
 
 /** Downloads a public file so it can be uploaded to Zellia, which does not accept URLs. */
@@ -253,27 +347,29 @@ export async function downloadFile(
 			description: `URL: ${rawUrl}`,
 		});
 
+	const deadline = Date.now() + DOWNLOAD_DEADLINE_MS;
+
 	// Redirects are followed by hand so every hop is checked before it is requested
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-		let response: IN8nHttpFullResponse;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw fail('Could not download the file (it took too long)');
+		let response: FetchResponse;
 		try {
-			response = (await this.helpers.httpRequest({
-				method: 'GET',
-				url: url.toString(),
-				encoding: 'stream',
-				returnFullResponse: true,
-				disableFollowRedirect: true,
-				ignoreHttpStatusErrors: true,
-				timeout: 30000,
-			})) as IN8nHttpFullResponse;
-		} catch {
+			response = await fetchUrl(url, remaining);
+		} catch (error) {
+			if (error instanceof BlockedAddressError) {
+				throw new NodeOperationError(this.getNode(), error.message, {
+					itemIndex: i,
+					description: 'Only public files can be sent. Use a binary field for internal files.',
+				});
+			}
 			throw fail('Could not download the file');
 		}
-		const stream = toStream(response.body);
+		const stream = response.body;
 		const status = Number(response.statusCode);
 
 		if (status >= 300 && status < 400) {
-			stream?.destroy();
+			stream.destroy();
 			const location = headerValue(response.headers, 'location');
 			if (!location)
 				throw fail(`Could not download the file (HTTP ${status} without a new address)`);
@@ -288,29 +384,21 @@ export async function downloadFile(
 			continue;
 		}
 		if (status < 200 || status >= 300) {
-			stream?.destroy();
+			stream.destroy();
 			throw fail(`Could not download the file (HTTP ${status})`);
 		}
 
 		const declaredSize = Number(headerValue(response.headers, 'content-length'));
 		if (Number.isFinite(declaredSize) && declaredSize > MAX_ATTACHMENT_BYTES) {
-			stream?.destroy();
+			stream.destroy();
 			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
 				itemIndex: i,
 				description: 'Zellia does not accept attachments above 40 MB.',
 			});
 		}
 
-		const data = stream
-			? await readLimited.call(this, stream, i)
-			: Buffer.from((response.body ?? []) as Uint8Array);
+		const data = await readLimited.call(this, stream, i, deadline);
 		if (data.length === 0) throw fail('The downloaded file is empty');
-		if (data.length > MAX_ATTACHMENT_BYTES) {
-			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
-				itemIndex: i,
-				description: 'Zellia does not accept attachments above 40 MB.',
-			});
-		}
 
 		const fileName =
 			fileNameOverride.trim() ||

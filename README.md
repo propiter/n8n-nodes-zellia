@@ -54,7 +54,7 @@ If a token is not allowed, the node stops with the message *This operation needs
 ### Message
 
 - **Send**: text, private note, buttons, cards, or an approved WhatsApp template with numbered or named variables. Options: quote a message, or send as a specific agent bot.
-- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool. For safety, the node downloads only from public addresses. It refuses localhost, internal names and private IPs, resolves the DNS name of every redirect hop, and stops a download at 40 MB. For full protection against DNS rebinding, also set `N8N_SSRF_PROTECTION_ENABLED=true` on the n8n instance.
+- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool. For safety, the node downloads only from public addresses. It refuses localhost, internal names and private IPs. It checks the DNS addresses when it connects and connects only to a checked address, on every redirect hop. A download stops at 40 MB or after 30 seconds. The download uses its own HTTP client, so the instance proxy settings do not apply to it.
 
 ### Conversation
 
