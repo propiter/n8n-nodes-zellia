@@ -88,7 +88,7 @@ Phone numbers are normalized to E.164: `+57 300-123 4567` becomes `+573001234567
 - **Register Sale**: Zellia's own sale registration (agent token). It sets the amount and wins the deal in one locked step. The same amount again is a no-op, and a different amount on a won deal is refused. Both Mark as Won and Register Sale trigger the same Purchase report in Zellia.
 - **Mark as Lost** can save a reason in a deal attribute (agent token).
 - **Move to Stage** returns `result`: `moved`, `already_in_stage`, or `skipped_backward` when **Only Move Forward** is on and the stage is earlier on the board.
-- **Update** merges custom attributes with the current ones. Turn on **Replace All Attributes** to delete the ones you do not list.
+- **Update** merges custom attributes with the current ones. Zellia does the merge in one locked step, so two flows that write different attributes at the same time do not overwrite each other. Turn on **Replace All Attributes** to delete the ones you do not list.
 - **Wait for the Deal**: Zellia opens the deal of a new conversation a moment after the conversation is created. The conversation lookup and Find for Contact can wait a few seconds for it. Create also returns the deal that Zellia opened in the meantime instead of failing. Zellia requires an amount above 0. If you leave the amount at 0, the node keeps the current amount. If the deal is already won, nothing changes and the output has `alreadyInStage: true`.
 - **Mark as Lost**: moves the deal to the lost stage of its pipeline.
 - **Move to Stage**: pick the stage from the list.

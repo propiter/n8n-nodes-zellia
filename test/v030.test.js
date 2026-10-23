@@ -63,15 +63,25 @@ describe('phone numbers with a default country code', () => {
 describe('deal custom attributes', () => {
 	const base = { resource: 'deal', operation: 'update', pipelineId: '2', dealId: 7 };
 
-	test('update merges the attributes with the current ones', async () => {
+	test('update sends only the given attributes and asks Zellia to merge them', async () => {
 		const { calls } = await execute(
 			{ ...base, updateFields: { customAttributes: { values: [{ key: 'motivo', value: 'precio' }] } } },
 			{
-				'GET /pipelines/2/items/7': { payload: { id: 7, custom_attributes: { origen: 'web', motivo: 'x' } } },
-				'PATCH /pipelines/2/items/7': (call) => ({ payload: { id: 7, custom_attributes: call.body.pipeline_item.custom_attributes } }),
+				'PATCH /pipelines/2/items/7': (call) => ({
+					payload: { id: 7, custom_attributes: { origen: 'web', ...call.body.pipeline_item.custom_attributes } },
+				}),
 			},
 		);
-		assert.deepEqual(calls.at(-1).body, { pipeline_item: { custom_attributes: { origen: 'web', motivo: 'precio' } } });
+		assert.deepEqual(calls.map((call) => call.method), ['PATCH']);
+		assert.deepEqual(calls[0].body, { pipeline_item: { custom_attributes: { motivo: 'precio' } }, merge: true });
+	});
+
+	test('update without attributes does not send merge', async () => {
+		const { calls } = await execute(
+			{ ...base, updateFields: { value: 500 } },
+			{ 'PATCH /pipelines/2/items/7': { payload: { id: 7, value: 500 } } },
+		);
+		assert.deepEqual(calls[0].body, { pipeline_item: { value: 500 } });
 	});
 
 	test('replace mode sends only the given attributes and does not read first', async () => {
@@ -80,17 +90,14 @@ describe('deal custom attributes', () => {
 			{ 'PATCH /pipelines/2/items/7': (call) => ({ payload: { id: 7, custom_attributes: call.body.pipeline_item.custom_attributes } }) },
 		);
 		assert.deepEqual(calls.map((call) => call.method), ['PATCH']);
-		assert.deepEqual(calls[0].body.pipeline_item.custom_attributes, { motivo: 'precio' });
+		assert.deepEqual(calls[0].body, { pipeline_item: { custom_attributes: { motivo: 'precio' } } });
 	});
 
 	test('a bot token that Zellia silently ignores stops with a clear error', async () => {
 		await assert.rejects(
 			execute(
 				{ ...base, updateFields: { customAttributes: { values: [{ key: 'motivo', value: 'precio' }] } } },
-				{
-					'GET /pipelines/2/items/7': { payload: { id: 7, custom_attributes: {} } },
-					'PATCH /pipelines/2/items/7': { payload: { id: 7, custom_attributes: {} } },
-				},
+				{ 'PATCH /pipelines/2/items/7': { payload: { id: 7, custom_attributes: { origen: 'web' } } } },
 			),
 			/Zellia did not save the custom attributes/,
 		);
@@ -103,11 +110,13 @@ describe('deal custom attributes', () => {
 				'GET /pipelines/2/items/7': { payload: { id: 7, status: 'open', custom_attributes: { origen: 'web' } } },
 				'GET /pipelines/2/stages': STAGES,
 				'POST /pipelines/2/items/7/move': { payload: { id: 7, status: 'lost', custom_attributes: { origen: 'web' } } },
-				'PATCH /pipelines/2/items/7': (call) => ({ payload: { id: 7, status: 'lost', custom_attributes: call.body.pipeline_item.custom_attributes } }),
+				'PATCH /pipelines/2/items/7': (call) => ({
+					payload: { id: 7, status: 'open', custom_attributes: { origen: 'web', ...call.body.pipeline_item.custom_attributes } },
+				}),
 			},
 		);
 		const patch = calls.find((call) => call.method === 'PATCH');
-		assert.deepEqual(patch.body.pipeline_item.custom_attributes, { origen: 'web', motivo_de_perdida: 'Precio alto' });
+		assert.deepEqual(patch.body, { pipeline_item: { custom_attributes: { motivo_de_perdida: 'Precio alto' } }, merge: true });
 		assert.ok(calls.indexOf(patch) < calls.findIndex((call) => call.path.endsWith('/move')));
 		assert.equal(items[0].result, 'lost');
 	});

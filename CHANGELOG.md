@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+Requires a Zellia server that supports `merge` on deal updates (Zellia PR #104, deployed on 2026-10-23).
+
+- Deal → Update and Mark as Lost: the node sends only the custom attributes you set, with `merge: true`. Zellia merges them into the current ones under a row lock. Before, the node read all the attributes and sent them back, so a change that another flow made in between could be lost. Update now makes one request instead of two.
+- **Replace All Attributes** works as before: it sends the exact list, without `merge`.
+
+Migration notes:
+- On a Zellia server without `merge` support, the server replaces all the attributes with the ones you send. Use 0.3.x with such a server.
+
 ## 0.3.1
 
 - Deal → Register Sale: `result` is `already_won` when the deal was already won, for example when the same sale is registered again. Before, it was always `won`. The node reads the deal first (one extra request), and Zellia still checks the amount.

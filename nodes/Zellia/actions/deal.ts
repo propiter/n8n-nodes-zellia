@@ -54,6 +54,7 @@ async function getDeal(this: IExecuteFunctions, itemsPath: string, dealId: numbe
 /**
  * PATCHes a deal and checks that Zellia kept what was sent. Zellia answers 200 but drops
  * custom attributes and the assignee when the token belongs to an agent bot.
+ * With merge, Zellia keeps the custom attributes that were not sent, under a row lock.
  */
 async function patchDeal(
 	this: IExecuteFunctions,
@@ -61,10 +62,12 @@ async function patchDeal(
 	dealId: number,
 	changes: IDataObject,
 	i: number,
+	merge = false,
 ): Promise<IDataObject> {
 	const saved = unwrapPayload(
 		await zelliaApiRequest.call(this, 'PATCH', `${itemsPath}/${dealId}`, {
 			pipeline_item: changes,
+			...(merge ? { merge: true } : {}),
 		}),
 	);
 	const sentAttributes = (changes.custom_attributes as IDataObject | undefined) ?? {};
@@ -89,21 +92,6 @@ async function patchDeal(
 		});
 	}
 	return saved;
-}
-
-/** Custom attributes to send: merged with the current ones unless replace is on. */
-async function attributesToSave(
-	this: IExecuteFunctions,
-	itemsPath: string,
-	dealId: number,
-	attributes: IDataObject,
-	replace: boolean,
-	current?: IDataObject,
-): Promise<IDataObject> {
-	if (replace) return attributes;
-	// Zellia replaces the whole hash on PATCH, so the node merges first
-	const deal = current ?? (await getDeal.call(this, itemsPath, dealId));
-	return { ...((deal.custom_attributes as IDataObject | undefined) ?? {}), ...attributes };
 }
 
 async function markWon(
@@ -161,15 +149,14 @@ async function markLost(
 	let attributes = deal.custom_attributes as IDataObject | undefined;
 	// The reason is saved first: with a bot token it fails before the deal moves
 	if (reason && reasonKey) {
-		const merged = await attributesToSave.call(
+		const saved = await patchDeal.call(
 			this,
 			itemsPath,
 			dealId,
-			{ [reasonKey]: reason },
-			false,
-			deal,
+			{ custom_attributes: { [reasonKey]: reason } },
+			i,
+			true,
 		);
-		const saved = await patchDeal.call(this, itemsPath, dealId, { custom_attributes: merged }, i);
 		attributes = saved.custom_attributes as IDataObject | undefined;
 	}
 	if (deal.status === 'lost') {
@@ -471,21 +458,15 @@ export async function executeDeal(
 			if (fields.currency) item.currency = String(fields.currency).trim().toUpperCase();
 			if (fields.assigneeId) item.assignee_id = Number(fields.assigneeId);
 			const attributes = keyValuesToObject(fields.customAttributes);
-			if (Object.keys(attributes).length) {
-				item.custom_attributes = await attributesToSave.call(
-					this,
-					itemsPath,
-					dealId,
-					attributes,
-					fields.replaceAttributes === true,
-				);
-			}
+			const hasAttributes = Object.keys(attributes).length > 0;
+			if (hasAttributes) item.custom_attributes = attributes;
 			if (!Object.keys(item).length) {
 				throw new NodeOperationError(this.getNode(), 'Add at least one field to update', {
 					itemIndex: i,
 				});
 			}
-			return await patchDeal.call(this, itemsPath, dealId, item, i);
+			const merge = hasAttributes && fields.replaceAttributes !== true;
+			return await patchDeal.call(this, itemsPath, dealId, item, i, merge);
 		}
 
 		case 'delete':
