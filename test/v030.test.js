@@ -127,6 +127,35 @@ describe('deal creation races with Zellia routing', () => {
 		assert.equal(items[0].alreadyExisted, true);
 	});
 
+	test('the conflict is detected in any language', async () => {
+		let reads = 0;
+		const { items } = await execute(
+			{ resource: 'deal', operation: 'create', pipelineId: '2', contactId: 5, onOpenDeal: 'returnExisting', additionalFields: {} },
+			{
+				'GET /contacts/5/pipeline_items': () => ({ payload: ++reads === 1 ? [] : [{ id: 45, pipeline_id: 2, status: 'open' }] }),
+				'POST /pipelines/2/items': () => {
+					throw new HttpError(422, { message: 'Contacto ya tiene un negocio abierto en este embudo', attributes: ['contact_id'] });
+				},
+			},
+		);
+		assert.equal(items[0].id, 45);
+	});
+
+	test('a real creation error is still reported', async () => {
+		await assert.rejects(
+			execute(
+				{ resource: 'deal', operation: 'create', pipelineId: '2', contactId: 5, onOpenDeal: 'returnExisting', additionalFields: {} },
+				{
+					'GET /contacts/5/pipeline_items': { payload: [] },
+					'POST /pipelines/2/items': () => {
+						throw new HttpError(422, { message: 'Currency is invalid', attributes: ['currency'] });
+					},
+				},
+			),
+			/Currency is invalid/,
+		);
+	});
+
 	test('find by conversation can wait for Zellia to open the deal', async () => {
 		let reads = 0;
 		const { items } = await execute(

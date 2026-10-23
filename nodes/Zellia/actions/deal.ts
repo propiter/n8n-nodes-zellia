@@ -296,10 +296,6 @@ async function findDealForConversation(
 	return { output: { result: 'no_deal', conversation_id: conversationId, contact_id: contactId } };
 }
 
-function isOpenDealConflict(error: unknown): boolean {
-	return /open deal/i.test(String((error as Error)?.message ?? ''));
-}
-
 async function createDeal(
 	this: IExecuteFunctions,
 	pipelineId: number,
@@ -338,8 +334,9 @@ async function createDeal(
 				await zelliaApiRequest.call(this, 'POST', itemsPath, { pipeline_item: item }),
 			);
 		} catch (error) {
-			// Zellia may open the deal itself (pipeline routing) between the check and the POST
-			const opened = isOpenDealConflict(error) ? await findOpen() : undefined;
+			// Zellia may open the deal itself (pipeline routing) between the check and the POST.
+			// Its error text depends on the account language, so check the deals instead of the text.
+			const opened = await findOpen();
 			// zelliaApiRequest already wraps errors; re-wrapping returns the same instance
 			if (!opened) throw new NodeApiError(this.getNode(), error as JsonObject);
 			if (onOpenDeal === 'error') throw refuse(opened);
