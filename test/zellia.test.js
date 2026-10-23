@@ -189,6 +189,38 @@ describe('attachments', () => {
 		);
 	});
 
+	test('redirects are followed and every hop is checked', async () => {
+		const first = 'https://cdn.test/short';
+		const final = 'https://files.test/real.png';
+		const { calls } = await execute({ ...base, fileSource: 'url', fileUrl: first }, route, {
+			downloads: {
+				[first]: { status: 302, headers: { location: final } },
+				[final]: { status: 200, body: Buffer.from('IMG'), headers: { 'content-type': 'image/png' } },
+			},
+		});
+		assert.deepEqual(calls.filter((call) => call.download).map((call) => [call.download, call.noRedirect]), [
+			[first, true],
+			[final, true],
+		]);
+		assert.match(calls.at(-1).body.toString(), /filename="real.png"/);
+	});
+
+	test('a redirect to an internal address is refused before it is requested', async () => {
+		const first = 'https://cdn.test/evil';
+		await assert.rejects(
+			execute({ ...base, fileSource: 'url', fileUrl: first }, route, {
+				downloads: { [first]: { status: 301, headers: { location: 'http://169.254.169.254/latest/meta-data' } } },
+			}),
+			/private or local address/,
+		);
+	});
+
+	test('private, local and container addresses are refused', async () => {
+		for (const url of ['http://localhost:5678/x', 'http://127.0.0.1/x', 'http://10.0.0.5/x', 'http://192.168.1.1/x', 'http://[::1]/x', 'http://redis:6379/x', 'http://n8n_db/x', 'http://2130706433/x', 'http://printer.local/x', 'ftp://files.test/x', 'https://user:pass@files.test/x']) {
+			await assert.rejects(execute({ ...base, fileSource: 'url', fileUrl: url }, route), /private or local address|must start with http|not valid/, url);
+		}
+	});
+
 	test('a binary field still works as before', async () => {
 		const { calls } = await execute({ ...base, binaryPropertyName: 'data' }, route, {
 			binary: { meta: { fileName: 'f.pdf', mimeType: 'application/pdf' }, data: Buffer.from('PDF') },

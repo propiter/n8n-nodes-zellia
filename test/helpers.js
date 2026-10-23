@@ -50,10 +50,10 @@ function createContext({ params = {}, routes = {}, binary, downloads = {} } = {}
 			constructExecutionMetaData: (items, { itemData }) => items.map((item) => ({ ...item, pairedItem: itemData })),
 			// Plain downloads (no Zellia auth). downloads: { url: { status, body, headers } }
 			httpRequest: async (options) => {
-				calls.push({ method: options.method, download: options.url });
+				calls.push({ method: options.method, download: options.url, noRedirect: options.disableFollowRedirect });
 				const file = downloads[options.url];
-				if (!file || file.status >= 400) throw Object.assign(new Error('download failed'), { httpCode: String(file ? file.status : 404) });
-				return { body: file.body, headers: file.headers || {}, statusCode: 200 };
+				if (!file) return { statusCode: 404, headers: {}, body: Buffer.alloc(0) };
+				return { statusCode: file.status, headers: file.headers || {}, body: file.body || Buffer.alloc(0) };
 			},
 			assertBinaryData: () => binary.meta,
 			getBinaryDataBuffer: async () => binary.data,

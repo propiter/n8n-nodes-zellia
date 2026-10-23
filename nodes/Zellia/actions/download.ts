@@ -23,7 +23,7 @@ export interface DownloadedFile {
 	mimeType: string;
 }
 
-function headerValue(headers: IN8nHttpFullResponse['headers'], name: string): string {
+function headerValue(headers: IN8nHttpFullResponse['headers'] | undefined, name: string): string {
 	const value = headers?.[name] ?? headers?.[name.toLowerCase()];
 	return String(Array.isArray(value) ? value[0] : (value ?? ''));
 }
@@ -48,14 +48,65 @@ export function mimeTypeFrom(contentType: string, fileName: string): string {
 	return MIME_BY_EXTENSION[extension] ?? (declared || 'application/octet-stream');
 }
 
-/** Downloads a public file so it can be uploaded to Zellia, which does not accept URLs. */
-export async function downloadFile(
-	this: IExecuteFunctions,
-	url: string,
-	i: number,
-	fileNameOverride = '',
-): Promise<DownloadedFile> {
-	if (!/^https?:\/\//i.test(url)) {
+const MAX_REDIRECTS = 3;
+
+function ipv4Blocked(parts: number[]): boolean {
+	const [a, b] = parts;
+	return (
+		a === 0 ||
+		a === 10 ||
+		a === 127 ||
+		(a === 100 && b >= 64 && b <= 127) ||
+		(a === 169 && b === 254) ||
+		(a === 172 && b >= 16 && b <= 31) ||
+		(a === 192 && b === 168) ||
+		(a === 192 && b === 0) ||
+		(a === 198 && (b === 18 || b === 19)) ||
+		a >= 224
+	);
+}
+
+/**
+ * Rejects destinations inside the server's network: names without a public domain and
+ * private, loopback, link-local (cloud metadata) and reserved IPs. Hostnames that resolve
+ * to private IPs need the instance-level N8N_SSRF_PROTECTION_ENABLED, which this node respects.
+ */
+export function isBlockedHost(hostname: string): boolean {
+	const host = hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, '')
+		.replace(/\.$/, '');
+	if (!host) return true;
+	if (host === 'localhost' || /\.(localhost|local|internal|lan|home|corp)$/.test(host)) return true;
+
+	const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	if (ipv4) return ipv4Blocked(ipv4.slice(1).map(Number));
+
+	if (host.includes(':')) {
+		const mapped = host.match(/^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+		if (mapped) return ipv4Blocked(mapped.slice(1).map(Number));
+		return (
+			host === '::' ||
+			host === '::1' ||
+			host.startsWith('::ffff:') ||
+			/^f[cd]/.test(host) ||
+			/^fe[89ab]/.test(host) ||
+			host.startsWith('ff')
+		);
+	}
+
+	// A name without a dot is a local or container service name, such as "redis"
+	return !host.includes('.');
+}
+
+function assertAllowedUrl(this: IExecuteFunctions, rawUrl: string, i: number): URL {
+	let url: URL;
+	try {
+		url = new URL(rawUrl);
+	} catch {
+		throw new NodeOperationError(this.getNode(), 'The file URL is not valid', { itemIndex: i });
+	}
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		throw new NodeOperationError(
 			this.getNode(),
 			'The file URL must start with http:// or https://',
@@ -64,32 +115,80 @@ export async function downloadFile(
 			},
 		);
 	}
-
-	let response: IN8nHttpFullResponse;
-	try {
-		response = (await this.helpers.httpRequest({
-			method: 'GET',
-			url,
-			encoding: 'arraybuffer',
-			returnFullResponse: true,
-			timeout: 30000,
-		})) as IN8nHttpFullResponse;
-	} catch (error) {
-		const failure = error as { httpCode?: string; response?: { status?: number } };
-		const status = failure.httpCode ?? failure.response?.status;
+	if (url.username || url.password || isBlockedHost(url.hostname)) {
 		throw new NodeOperationError(
 			this.getNode(),
-			`Could not download the file${status ? ` (HTTP ${status})` : ''}`,
-			{ itemIndex: i, description: `URL: ${url}` },
+			'The file URL points to a private or local address',
+			{
+				itemIndex: i,
+				description: 'Only public files can be sent. Use a binary field for internal files.',
+			},
 		);
 	}
+	return url;
+}
 
-	const body = response.body as unknown;
-	const data = Buffer.isBuffer(body) ? body : Buffer.from(body as ArrayBuffer);
+/** Downloads a public file so it can be uploaded to Zellia, which does not accept URLs. */
+export async function downloadFile(
+	this: IExecuteFunctions,
+	rawUrl: string,
+	i: number,
+	fileNameOverride = '',
+): Promise<DownloadedFile> {
+	let url = assertAllowedUrl.call(this, rawUrl, i);
+	let response: IN8nHttpFullResponse | undefined;
+
+	// Redirects are followed by hand so every hop is checked before it is requested
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		try {
+			response = (await this.helpers.httpRequest({
+				method: 'GET',
+				url: url.toString(),
+				encoding: 'arraybuffer',
+				returnFullResponse: true,
+				disableFollowRedirect: true,
+				ignoreHttpStatusErrors: true,
+				timeout: 30000,
+			})) as IN8nHttpFullResponse;
+		} catch {
+			throw new NodeOperationError(this.getNode(), 'Could not download the file', {
+				itemIndex: i,
+				description: `URL: ${rawUrl}`,
+			});
+		}
+		const status = Number(response.statusCode);
+		if (status >= 300 && status < 400) {
+			const location = headerValue(response.headers, 'location');
+			if (!location || hop === MAX_REDIRECTS) {
+				throw new NodeOperationError(
+					this.getNode(),
+					'Could not download the file (too many redirects)',
+					{
+						itemIndex: i,
+						description: `URL: ${rawUrl}`,
+					},
+				);
+			}
+			url = assertAllowedUrl.call(this, new URL(location, url).toString(), i);
+			continue;
+		}
+		if (status < 200 || status >= 300) {
+			throw new NodeOperationError(this.getNode(), `Could not download the file (HTTP ${status})`, {
+				itemIndex: i,
+				description: `URL: ${rawUrl}`,
+			});
+		}
+		break;
+	}
+
+	const body = response?.body as unknown;
+	const data = Buffer.isBuffer(body)
+		? body
+		: Buffer.from((body ?? new ArrayBuffer(0)) as ArrayBuffer);
 	if (data.length === 0) {
 		throw new NodeOperationError(this.getNode(), 'The downloaded file is empty', {
 			itemIndex: i,
-			description: `URL: ${url}`,
+			description: `URL: ${rawUrl}`,
 		});
 	}
 	if (data.length > MAX_ATTACHMENT_BYTES) {
@@ -101,10 +200,10 @@ export async function downloadFile(
 
 	const fileName =
 		fileNameOverride.trim() ||
-		fileNameFrom(url, headerValue(response.headers, 'content-disposition'));
+		fileNameFrom(url.toString(), headerValue(response?.headers, 'content-disposition'));
 	return {
 		data,
 		fileName,
-		mimeType: mimeTypeFrom(headerValue(response.headers, 'content-type'), fileName),
+		mimeType: mimeTypeFrom(headerValue(response?.headers, 'content-type'), fileName),
 	};
 }

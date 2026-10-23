@@ -3,6 +3,7 @@
 ## 0.2.0
 
 - Message → Send Attachment: new **File Source** option. Choose **URL** to send a file from a public link. The node downloads the file and uploads it to Zellia, so you do not need an HTTP Request node first. It also works when the node is used as an AI Agent tool. **Binary Field** stays the default, so existing nodes do not change.
+- URL downloads accept only public addresses. The node refuses localhost, names without a public domain (such as container service names), and private, loopback, link-local and reserved IPs. It follows at most 3 redirects and checks each hop before it requests it.
 
 ## 0.1.0
 

@@ -49,7 +49,7 @@ If a token is not allowed, the node stops with the message *This operation needs
 ### Message
 
 - **Send**: text, private note, buttons, cards, or an approved WhatsApp template with numbered or named variables. Options: quote a message, or send as a specific agent bot.
-- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool.
+- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool. For safety, the node downloads only from public addresses. It refuses localhost, internal names and private IPs, and it checks every redirect. To also block public names that resolve to private IPs, set `N8N_SSRF_PROTECTION_ENABLED=true` on the n8n instance.
 
 ### Conversation
 
