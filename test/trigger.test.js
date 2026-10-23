@@ -252,6 +252,23 @@ describe('webhook lifecycle', () => {
 		assert.equal(context.staticData.webhookSecret, 'abc');
 	});
 
+	test('checkExists removes the webhook it registered for an old URL', async () => {
+		const context = createContext({
+			params,
+			routes: {
+				'GET /webhooks': {
+					payload: { webhooks: [{ id: 12, url: 'https://n8n.test/webhook/old-path', subscriptions: ['message_created'] }] },
+				},
+				'DELETE /webhooks/12': '',
+			},
+		});
+		context.staticData.webhookId = 12;
+		context.staticData.webhookSecret = 'abc';
+		assert.equal(await new ZelliaTrigger().webhookMethods.default.checkExists.call(context), false);
+		assert.deepEqual(context.calls.map((call) => `${call.method} ${call.path}`), ['GET /webhooks', 'DELETE /webhooks/12']);
+		assert.deepEqual(context.staticData, {});
+	});
+
 	test('automation source registers nothing', async () => {
 		const context = createContext({ params: { source: 'automation' } });
 		assert.equal(await new ZelliaTrigger().webhookMethods.default.checkExists.call(context), true);

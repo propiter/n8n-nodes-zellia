@@ -236,7 +236,20 @@ export class ZelliaTrigger implements INodeType {
 				const inboxId = Number(this.getNodeParameter('inboxId', '') || 0);
 
 				const webhooks = listWebhooks(await zelliaApiRequest.call(this, 'GET', '/webhooks'));
-				const existing = webhooks.find((webhook) => webhook.url === url);
+
+				// The path or the n8n URL changed: remove the webhook this node registered before,
+				// so Zellia stops sending signed events to an address the node no longer owns
+				const previous = webhooks.find((webhook) => Number(webhook.id) === staticData.webhookId);
+				if (previous && previous.url !== url) {
+					await zelliaApiRequest.call(this, 'DELETE', `/webhooks/${previous.id}`);
+					delete staticData.webhookId;
+					delete staticData.webhookSecret;
+				}
+
+				const existing =
+					webhooks.find(
+						(webhook) => webhook.url === url && Number(webhook.id) !== Number(previous?.id ?? -1),
+					) ?? (previous && previous.url === url ? previous : undefined);
 				if (!existing) {
 					delete staticData.webhookId;
 					delete staticData.webhookSecret;

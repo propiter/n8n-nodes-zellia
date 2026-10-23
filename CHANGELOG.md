@@ -3,6 +3,7 @@
 ## 0.2.2
 
 - Zellia Trigger: new optional **Path** field, so the URL can be readable, such as `/webhook/new-lead`. When it is empty, n8n uses the node's automatic ID, so the URL of an existing trigger without a path changes from `/webhook/<id>/webhook` to `/webhook/<id>`. Update the URL in Zellia after you install this version.
+- Zellia Trigger (Account Webhook): when the URL of the node changes, for example after you set a path, the node deletes the webhook it registered for the old URL before it registers the new one.
 - Zellia Trigger: an accepted call now answers 200 with an empty body. Before, it answered the literal text `firstEntryJson`.
 
 ## 0.2.1
