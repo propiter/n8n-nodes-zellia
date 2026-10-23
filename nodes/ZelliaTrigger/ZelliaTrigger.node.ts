@@ -11,6 +11,7 @@ import type {
 import { NodeConnectionTypes } from 'n8n-workflow';
 
 import { asArray, parseLabels, unwrapPayload, zelliaApiRequest } from '../Zellia/GenericFunctions';
+import { testWebhookSecret } from './secretTest';
 import { safeEqual, verifySignature } from './signature';
 import { simplifyEvent } from './simplify';
 
@@ -67,6 +68,7 @@ export class ZelliaTrigger implements INodeType {
 			{
 				name: 'zelliaWebhookSecretApi',
 				required: true,
+				testedBy: 'zelliaWebhookSecretTest',
 				displayOptions: { show: { source: ['automation'], secretSource: ['credential'] } },
 			},
 		],
@@ -241,6 +243,7 @@ export class ZelliaTrigger implements INodeType {
 	};
 
 	methods = {
+		credentialTest: { zelliaWebhookSecretTest: testWebhookSecret },
 		loadOptions: {
 			async getInboxes(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const response = await zelliaApiRequest.call(this, 'GET', '/inboxes');

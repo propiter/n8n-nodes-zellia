@@ -227,10 +227,11 @@ export function normalizePhone(raw: string, defaultCountryCode = ''): string {
 	if (trimmed.startsWith('+')) return `+${digits}`;
 	if (digits.startsWith('00')) return `+${digits.slice(2)}`;
 	const code = String(defaultCountryCode ?? '').replace(/\D/g, '');
+	if (!code) return `+${digits}`;
 	// A number that already starts with the code and is long enough to hold one is kept
-	if (code && !(digits.startsWith(code) && digits.length >= code.length + 8)) {
-		digits = `${code}${digits}`;
-	}
+	if (digits.startsWith(code) && digits.length >= code.length + 8) return `+${digits}`;
+	// National numbers often carry a trunk 0 (0991…, 07911…) that is dropped with the code
+	digits = `${code}${digits.replace(/^0/, '')}`;
 	return `+${digits}`;
 }
 

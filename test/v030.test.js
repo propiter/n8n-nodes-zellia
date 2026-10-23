@@ -106,7 +106,9 @@ describe('deal custom attributes', () => {
 				'PATCH /pipelines/2/items/7': (call) => ({ payload: { id: 7, status: 'lost', custom_attributes: call.body.pipeline_item.custom_attributes } }),
 			},
 		);
-		assert.deepEqual(calls.at(-1).body.pipeline_item.custom_attributes, { origen: 'web', motivo_de_perdida: 'Precio alto' });
+		const patch = calls.find((call) => call.method === 'PATCH');
+		assert.deepEqual(patch.body.pipeline_item.custom_attributes, { origen: 'web', motivo_de_perdida: 'Precio alto' });
+		assert.ok(calls.indexOf(patch) < calls.findIndex((call) => call.path.endsWith('/move')));
 		assert.equal(items[0].result, 'lost');
 	});
 });
@@ -243,7 +245,7 @@ describe('WhatsApp templates with header and buttons', () => {
 		assert.deepEqual(body.template_params.processed_params, {
 			body: { 1: 'Ana' },
 			header: { media_url: 'https://x.test/a.png', media_type: 'image' },
-			buttons: [{}, { type: 'url', parameter: 'ord-123' }],
+			buttons: [{ type: 'quick_reply' }, { type: 'url', parameter: 'ord-123' }],
 		});
 	});
 
@@ -320,5 +322,115 @@ describe('error messages', () => {
 
 	test('a 422 with message and attributes keeps the message', () => {
 		assert.equal(describeZelliaError(new HttpError(422, { message: 'Value must be greater than 0', attributes: ['value'] })).message, 'Value must be greater than 0');
+	});
+});
+
+describe('review fixes', () => {
+	const STAGES_MIXED = {
+		payload: [
+			{ id: 9, name: 'Ganado', stage_type: 'won', position: 0 },
+			{ id: 6, name: 'Nuevo', stage_type: 'open', position: 1 },
+			{ id: 8, name: 'Seguimiento', stage_type: 'open', position: 3 },
+			{ id: 10, name: 'Perdido', stage_type: 'lost', position: 2 },
+		],
+	};
+
+	test('a single button at position 1 keeps a valid template', () => {
+		const body = buildMessageBody.call(createContext({ params: {
+			messageKind: 'template', templateName: 't', templateLanguage: 'es', templateCategory: 'UTILITY',
+			templateParamsFormat: 'positional', templatePositional: { values: [{ value: 'Ana' }] },
+			templateButtons: { values: [{ index: 1, type: 'url', parameter: 'x1' }] },
+		} }), 0);
+		const buttons = body.template_params.processed_params.buttons;
+		assert.ok(buttons.every((button) => button.type), JSON.stringify(buttons));
+		assert.deepEqual(buttons[1], { type: 'url', parameter: 'x1' });
+	});
+
+	test('a media header without a type is still sent as a file', () => {
+		const body = buildMessageBody.call(createContext({ params: {
+			messageKind: 'template', templateName: 't', templateLanguage: 'es', templateCategory: 'UTILITY',
+			templateParamsFormat: 'positional', templatePositional: { values: [] },
+			templateHeader: { mediaUrl: 'https://x.test/a.pdf', mediaType: 'document' },
+		} }), 0);
+		assert.deepEqual(body.template_params.processed_params.header, { media_url: 'https://x.test/a.pdf', media_type: 'document' });
+	});
+
+	test('a wait value that is not a number does not loop', async () => {
+		const started = Date.now();
+		await execute(
+			{ resource: 'deal', operation: 'getForContact', findBy: 'contact', contactId: 5, contactFilters: { waitSeconds: 'abc' } },
+			{ 'GET /contacts/5/pipeline_items': { payload: [] } },
+		);
+		assert.ok(Date.now() - started < 1500);
+	});
+
+	test('the trunk 0 of a national number is removed', () => {
+		assert.equal(normalizePhone('0991234567', '593'), '+593991234567');
+		assert.equal(normalizePhone('07911 123456', '44'), '+447911123456');
+	});
+
+	test('only forward follows the server order and never moves a closed deal', async () => {
+		const routes = (stageId, status) => ({
+			'GET /pipelines/2/items/7': { payload: { id: 7, status, pipeline_stage_id: stageId } },
+			'GET /pipelines/2/stages': STAGES_MIXED,
+			'POST /pipelines/2/items/7/move': (call) => ({ payload: { id: 7, pipeline_stage_id: call.body.pipeline_stage_id } }),
+		});
+		const params = (stageId) => ({ resource: 'deal', operation: 'moveToStage', pipelineId: '2', dealId: 7, stageId, onlyForward: true });
+		assert.equal((await execute(params('9'), routes(8, 'open'))).items[0].result, 'moved');
+		assert.equal((await execute(params('6'), routes(9, 'won'))).items[0].result, 'skipped_closed');
+		assert.equal((await execute(params('10'), routes(9, 'won'))).items[0].result, 'skipped_closed');
+		assert.equal((await execute(params('6'), routes(8, 'open'))).items[0].result, 'skipped_backward');
+	});
+
+	test('mark as lost saves the reason before moving, so a bot fails before any change', async () => {
+		const { calls } = await execute(
+			{ resource: 'deal', operation: 'markLost', pipelineId: '2', dealLookup: 'dealId', dealId: 7, lostReason: 'Precio', lostReasonKey: 'motivo' },
+			{
+				'GET /pipelines/2/items/7': { payload: { id: 7, status: 'open', custom_attributes: {} } },
+				'PATCH /pipelines/2/items/7': { payload: { id: 7, custom_attributes: {} } },
+			},
+		).catch((error) => ({ calls: error.calls || [], error }));
+		assert.ok(!(calls || []).some((call) => call.path && call.path.endsWith('/move')));
+		await assert.rejects(
+			execute(
+				{ resource: 'deal', operation: 'markLost', pipelineId: '2', dealLookup: 'dealId', dealId: 7, lostReason: 'Precio', lostReasonKey: 'motivo' },
+				{
+					'GET /pipelines/2/items/7': { payload: { id: 7, status: 'open', custom_attributes: {} } },
+					'PATCH /pipelines/2/items/7': { payload: { id: 7, custom_attributes: {} } },
+					'POST /pipelines/2/items/7/move': () => { throw new Error('must not move'); },
+				},
+			),
+			/did not save the custom attributes/,
+		);
+	});
+
+	test('register sale by conversation on a deal already won uses the same server rules', async () => {
+		const { calls, items } = await execute(
+			{ resource: 'deal', operation: 'registerSale', pipelineId: '2', dealLookup: 'conversation', conversationId: 40, value: 900 },
+			{
+				'GET /conversations/40': { id: 40, meta: { sender: { id: 5 } } },
+				'GET /contacts/5/pipeline_items': (call) => ({ payload: call.qs && call.qs.conversation_id ? [{ id: 7, pipeline_id: 2, status: 'won' }] : [] }),
+				'POST /pipelines/2/items/7/register_sale': { payload: { id: 7, status: 'won', value: '900.0' } },
+			},
+		);
+		assert.equal(calls.at(-1).path, '/pipelines/2/items/7/register_sale');
+		assert.equal(items[0].result, 'won');
+	});
+
+	test('waiting without a status filter waits for an open deal, not an old one', async () => {
+		let reads = 0;
+		const { items } = await execute(
+			{ resource: 'deal', operation: 'getForContact', findBy: 'contact', contactId: 5, contactFilters: { waitSeconds: 3 } },
+			{ 'GET /contacts/5/pipeline_items': () => ({ payload: ++reads < 2 ? [{ id: 1, pipeline_id: 2, status: 'won' }] : [{ id: 1, pipeline_id: 2, status: 'won' }, { id: 2, pipeline_id: 2, status: 'open' }] }) },
+		);
+		assert.ok(items.some((deal) => deal.status === 'open'));
+	});
+});
+
+describe('webhook secret credential test', () => {
+	const { testWebhookSecret } = require('../dist/nodes/ZelliaTrigger/secretTest.js');
+	test('short secrets are refused and long ones pass', async () => {
+		assert.equal((await testWebhookSecret.call({}, { data: { secret: 'short' } })).status, 'Error');
+		assert.equal((await testWebhookSecret.call({}, { data: { secret: 'a'.repeat(32) } })).status, 'OK');
 	});
 });

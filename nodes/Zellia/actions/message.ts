@@ -12,7 +12,8 @@ function collectionValues(ctx: IExecuteFunctions, name: string, i: number): IDat
 
 /** Header parameters: numbered text variables, or a media file. */
 function templateHeader(header: IDataObject): IDataObject | undefined {
-	if (header.type === 'media') {
+	// A file URL means a media header even when the Type option was not added
+	if (header.type === 'media' || (header.type === undefined && header.mediaUrl)) {
 		const url = String(header.mediaUrl ?? '').trim();
 		if (!url) return undefined;
 		const media: IDataObject = { media_url: url, media_type: String(header.mediaType ?? 'image') };
@@ -35,7 +36,8 @@ function templateButtons(rows: IDataObject[]): IDataObject[] {
 		const parameter = String(row.parameter ?? '').trim();
 		const index = Math.max(0, Math.floor(Number(row.index ?? 0)));
 		if (!parameter) continue;
-		while (buttons.length < index) buttons.push({});
+		// Zellia needs a type on every entry; quick_reply slots carry no value and are skipped
+		while (buttons.length < index) buttons.push({ type: 'quick_reply' });
 		buttons[index] = { type: String(row.type ?? 'url'), parameter };
 	}
 	return buttons;

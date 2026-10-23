@@ -8,6 +8,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes } from 'n8n-workflow';
 
+import { testWebhookSecret } from '../ZelliaTrigger/secretTest';
 import { safeEqual } from '../ZelliaTrigger/signature';
 
 type Headers = Record<string, string | string[] | undefined>;
@@ -59,6 +60,7 @@ export class ZelliaToolTrigger implements INodeType {
 			{
 				name: 'zelliaWebhookSecretApi',
 				required: true,
+				testedBy: 'zelliaWebhookSecretTest',
 				displayOptions: {
 					show: { authentication: ['bearer', 'header'], secretSource: ['credential'] },
 				},
@@ -229,6 +231,10 @@ export class ZelliaToolTrigger implements INodeType {
 					'Optional. Rejects calls that come from a different Zellia account ID. 0 accepts any account.',
 			},
 		],
+	};
+
+	methods = {
+		credentialTest: { zelliaWebhookSecretTest: testWebhookSecret },
 	};
 
 	// Captain calls a fixed URL: there is nothing to register in Zellia

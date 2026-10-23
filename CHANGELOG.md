@@ -4,15 +4,15 @@
 
 New:
 - Deal → **Register Sale**: Zellia's sale registration in one locked step (agent token).
-- Deal → Move to Stage: **Only Move Forward** option and a `result` field (`moved`, `already_in_stage`, `skipped_backward`).
+- Deal → Move to Stage: **Only Move Forward** option and a `result` field (`moved`, `already_in_stage`, `skipped_backward`, `skipped_closed`). With the option on, a won or lost deal is never moved, and stages follow Zellia's board order (open stages first).
 - Deal → Mark as Lost: optional reason saved in a deal attribute.
 - Deal → Mark as Won: `amountDiffers` when the deal was already won with another amount.
 - Deal: **Wait for the Deal** in the conversation lookup and in Find for Contact, for deals that Zellia opens a moment after a new conversation.
 - Message → Send (WhatsApp template): header (text variables or media) and button values (URL suffix or coupon code).
-- Credential: optional **Default Country Code** for phone numbers written without a country code.
+- Credential: optional **Default Country Code** for phone numbers written without a country code. A leading trunk 0 is removed. Where national numbers can start with the country code digits (for example Brazil 55), write numbers with + or 00.
 - **Zellia Webhook Secret API** credential: the trigger tokens can be stored encrypted.
 - Captain Tool Trigger: **Respond Immediately, With a Fixed Answer** for long jobs.
-- Zellia Trigger: conversation events keep the last message (`text`, `last_message_id`) when Simplify is on.
+- Zellia Trigger: conversation events keep the last message (`text`, `last_message_id`) when Simplify is on. A flow that told message events apart by checking whether `text` exists must check `event` instead.
 - Clearer errors for rate limits (429) and unavailable server (5xx).
 
 Changed (check the migration notes):

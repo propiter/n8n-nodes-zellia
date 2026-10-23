@@ -69,8 +69,10 @@ async function patchDeal(
 	);
 	const sentAttributes = (changes.custom_attributes as IDataObject | undefined) ?? {};
 	const savedAttributes = (saved.custom_attributes as IDataObject | undefined) ?? {};
+	const comparable = (value: unknown) =>
+		value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
 	const attributesLost = Object.keys(sentAttributes).some(
-		(key) => String(savedAttributes[key] ?? '') !== String(sentAttributes[key] ?? ''),
+		(key) => comparable(savedAttributes[key]) !== comparable(sentAttributes[key]),
 	);
 	if (attributesLost) {
 		throw new NodeOperationError(this.getNode(), 'Zellia did not save the custom attributes', {
@@ -154,22 +156,12 @@ async function markLost(
 	i: number,
 ): Promise<IDataObject> {
 	const deal = await getDeal.call(this, itemsPath, dealId);
-	let result: IDataObject;
-	if (deal.status === 'lost') {
-		result = { ...deal, alreadyInStage: true, result: 'already_lost' };
-	} else {
-		const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
-		result = {
-			...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
-			alreadyInStage: false,
-			result: 'lost',
-		};
-	}
-
 	const reason = String(this.getNodeParameter('lostReason', i, '') ?? '').trim();
 	const reasonKey = String(this.getNodeParameter('lostReasonKey', i, '') ?? '').trim();
+	let attributes = deal.custom_attributes as IDataObject | undefined;
+	// The reason is saved first: with a bot token it fails before the deal moves
 	if (reason && reasonKey) {
-		const attributes = await attributesToSave.call(
+		const merged = await attributesToSave.call(
 			this,
 			itemsPath,
 			dealId,
@@ -177,16 +169,18 @@ async function markLost(
 			false,
 			deal,
 		);
-		const saved = await patchDeal.call(
-			this,
-			itemsPath,
-			dealId,
-			{ custom_attributes: attributes },
-			i,
-		);
-		result = { ...result, custom_attributes: saved.custom_attributes };
+		const saved = await patchDeal.call(this, itemsPath, dealId, { custom_attributes: merged }, i);
+		attributes = saved.custom_attributes as IDataObject | undefined;
 	}
-	return result;
+	if (deal.status === 'lost') {
+		return { ...deal, custom_attributes: attributes, alreadyInStage: true, result: 'already_lost' };
+	}
+	const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
+	return {
+		...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
+		alreadyInStage: false,
+		result: 'lost',
+	};
 }
 
 async function registerSale(
@@ -216,7 +210,9 @@ async function contactDeals(
 	accept: (deals: IDataObject[]) => boolean,
 	waitSeconds: number,
 ): Promise<IDataObject[]> {
-	const deadline = Date.now() + Math.min(Math.max(waitSeconds, 0), MAX_WAIT_SECONDS) * 1000;
+	// An expression can give a non-number; treat it as no wait so the loop always ends
+	const seconds = Number.isFinite(Number(waitSeconds)) ? Number(waitSeconds) : 0;
+	const deadline = Date.now() + Math.min(Math.max(seconds, 0), MAX_WAIT_SECONDS) * 1000;
 	for (;;) {
 		const response = await zelliaApiRequest.call(
 			this,
@@ -282,17 +278,10 @@ async function findDealForConversation(
 		undefined,
 		{ conversation_id: conversationId },
 	);
+	// A deal this conversation already closed goes through the same operation, so the rules
+	// (amount check, idempotency, reason) are the same as with a deal ID
 	const done = inPipeline(asArray(linked.payload)).find((deal) => deal.status === target);
-	if (done) {
-		return {
-			output: {
-				...done,
-				alreadyInStage: true,
-				result: `already_${target}`,
-				conversation_id: conversationId,
-			},
-		};
-	}
+	if (done) return { dealId: Number(done.id) };
 	return { output: { result: 'no_deal', conversation_id: conversationId, contact_id: contactId } };
 }
 
@@ -373,11 +362,15 @@ async function findForContact(this: IExecuteFunctions, i: number): Promise<IData
 				(!filters.pipelineId || Number(deal.pipeline_id) === Number(filters.pipelineId)) &&
 				(!filters.status || deal.status === filters.status),
 		);
+	// Without a status filter an old won or lost deal would end the wait at once
 	const deals = await contactDeals.call(
 		this,
 		contactId,
 		qs,
-		(list) => matches(list).length > 0,
+		(list) =>
+			filters.status
+				? matches(list).length > 0
+				: matches(list).some((deal) => deal.status === 'open'),
 		Number(filters.waitSeconds ?? 0),
 	);
 	return matches(deals);
@@ -397,12 +390,19 @@ async function moveToStage(
 	if (currentStageId === stageId) return { ...deal, result: 'already_in_stage' };
 
 	if (onlyForward) {
+		// A closed deal (won or lost) is the end of the board: it is never moved
+		if (deal.status === 'won' || deal.status === 'lost')
+			return { ...deal, result: 'skipped_closed' };
 		const stages = await getStages.call(this, pipelineId);
-		const position = (id: number) =>
-			Number(stages.find((stage) => Number(stage.id) === id)?.position);
-		// Won and lost come last, so a closed deal never moves back to an open stage
-		if (position(stageId) < position(currentStageId))
-			return { ...deal, result: 'skipped_backward' };
+		// The server's board order: open stages first, then won and lost; then position, then id
+		const rank = (id: number) => {
+			const stage = stages.find((candidate) => Number(candidate.id) === id);
+			const closed = stage && stage.stage_type !== 'open' ? 1 : 0;
+			return [closed, Number(stage?.position ?? 0), id];
+		};
+		const [a, b] = [rank(stageId), rank(currentStageId)];
+		const earlier = a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+		if (earlier < 0) return { ...deal, result: 'skipped_backward' };
 	}
 	return { ...(await moveDeal.call(this, itemsPath, dealId, stageId)), result: 'moved' };
 }

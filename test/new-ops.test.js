@@ -137,11 +137,13 @@ describe('close a deal from a conversation', () => {
 	});
 
 	test('reports already won when this conversation already closed it', async () => {
-		const { items, calls } = await execute(params('markWon'), routes([
-			{ id: 7, pipeline_id: 2, status: 'won', value: '900000.0', active_conversation: { id: 40 } },
-		]));
+		const { items, calls } = await execute(params('markWon'), routes(
+			[{ id: 7, pipeline_id: 2, status: 'won', value: '900000.0', active_conversation: { id: 40 } }],
+			{ 'GET /pipelines/2/items/7': { payload: { id: 7, status: 'won', value: '900000.0' } } },
+		));
 		assert.equal(items[0].result, 'already_won');
 		assert.equal(items[0].id, 7);
+		assert.equal(items[0].amountDiffers, true);
 		assert.deepEqual(calls[2].qs, { conversation_id: 40 });
 	});
 
@@ -151,7 +153,10 @@ describe('close a deal from a conversation', () => {
 	});
 
 	test('a deal closed while only linked to this conversation counts as already done', async () => {
-		const { items } = await execute(params('markWon'), routes([], {}, [{ id: 8, pipeline_id: 2, status: 'won' }]));
+		const { items } = await execute(
+			params('markWon'),
+			routes([], { 'GET /pipelines/2/items/8': { payload: { id: 8, status: 'won', value: '850000.0' } } }, [{ id: 8, pipeline_id: 2, status: 'won' }]),
+		);
 		assert.equal(items[0].result, 'already_won');
 		assert.equal(items[0].id, 8);
 	});
