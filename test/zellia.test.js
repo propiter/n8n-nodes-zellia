@@ -155,6 +155,34 @@ describe('message body', () => {
 	});
 });
 
+describe('address checks', () => {
+	const { isBlockedHost, parseIpv6 } = require('../dist/nodes/Zellia/actions/download.js');
+
+	test('parseIpv6 expands every form to 16 bytes', () => {
+		assert.deepEqual(parseIpv6('::1'), [...Array(15).fill(0), 1]);
+		assert.deepEqual(parseIpv6('::ffff:10.0.0.1').slice(10), [0xff, 0xff, 10, 0, 0, 1]);
+		assert.equal(parseIpv6('2606:4700::1111').length, 16);
+		assert.equal(parseIpv6('1::2::3'), undefined);
+		assert.equal(parseIpv6('gggg::1'), undefined);
+	});
+
+	test('IPv6 forms that carry a private IPv4 or reach local networks are blocked', () => {
+		for (const host of [
+			'[::1]', '[::]', '[::7f00:1]', '[::127.0.0.1]', '[::ffff:7f00:1]', '[::ffff:192.168.1.1]',
+			'[64:ff9b::a00:1]', '[64:ff9b:1::1]', '[2002:a00:1::1]', '[2001:0:4136:e378::1]',
+			'[fd00::1]', '[fe80::1]', '[ff02::1]', '[2001:db8::1]', '[100::1]',
+		]) {
+			assert.equal(isBlockedHost(host), true, host);
+		}
+	});
+
+	test('public addresses and names pass', () => {
+		for (const host of ['[2606:4700:4700::1111]', '[::ffff:8.8.8.8]', '8.8.8.8', 'data.llantas.whitelabel.lat']) {
+			assert.equal(isBlockedHost(host), false, host);
+		}
+	});
+});
+
 describe('attachments', () => {
 	const route = { 'POST /conversations/9/messages': (call) => ({ id: 77, size: call.body.length }) };
 	const base = { resource: 'message', operation: 'sendAttachment', conversationId: 9, caption: 'Precio: $1', private: false };
