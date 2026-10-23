@@ -18,26 +18,29 @@ export function summarizeStatus(conversation: IDataObject): IDataObject {
 	const meta = (conversation.meta as IDataObject | undefined) ?? {};
 	const assignee = meta.assignee as IDataObject | undefined;
 	const team = meta.team as IDataObject | undefined;
-	const assigneeType = String(meta.assignee_type ?? '');
-	// Pending means a bot is answering; otherwise an assigned agent or nobody has it
-	const handledBy =
-		conversation.status === 'pending' || assigneeType === 'AgentBot'
+	const isBot = String(meta.assignee_type ?? '') === 'AgentBot';
+	const hasAgent = !!assignee?.id && !isBot;
+	// A human assignee wins; pending without one means a bot is answering
+	const handledBy = hasAgent
+		? 'agent'
+		: isBot || conversation.status === 'pending'
 			? 'bot'
-			: assignee?.id
-				? 'agent'
-				: 'nobody';
+			: 'nobody';
+	const waitingSince = Number(conversation.waiting_since);
 	return {
 		conversation_id: conversation.id,
 		status: conversation.status ?? null,
 		handled_by: handledBy,
 		snoozed_until: conversation.snoozed_until ?? null,
 		priority: conversation.priority ?? null,
+		assignee_type: assignee?.id ? (isBot ? 'bot' : 'agent') : null,
 		assignee_id: assignee?.id ?? null,
 		assignee_name: assignee?.name ?? null,
 		team_id: team?.id ?? null,
 		team_name: team?.name ?? null,
 		labels: Array.isArray(conversation.labels) ? conversation.labels : [],
-		waiting_since: conversation.waiting_since ?? null,
+		// Zellia sends 0 when nobody is waiting
+		waiting_since: Number.isFinite(waitingSince) && waitingSince > 0 ? waitingSince : null,
 	};
 }
 

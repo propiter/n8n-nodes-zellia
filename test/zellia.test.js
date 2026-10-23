@@ -155,6 +155,10 @@ describe('message body', () => {
 	});
 });
 
+const { setHostResolver } = require('../dist/nodes/Zellia/actions/download.js');
+// Unit tests never hit real DNS: every name resolves to a public address unless a test says otherwise
+setHostResolver(async () => ['93.184.216.34']);
+
 describe('address checks', () => {
 	const { isBlockedHost, parseIpv6 } = require('../dist/nodes/Zellia/actions/download.js');
 
@@ -170,14 +174,14 @@ describe('address checks', () => {
 		for (const host of [
 			'[::1]', '[::]', '[::7f00:1]', '[::127.0.0.1]', '[::ffff:7f00:1]', '[::ffff:192.168.1.1]',
 			'[64:ff9b::a00:1]', '[64:ff9b:1::1]', '[2002:a00:1::1]', '[2001:0:4136:e378::1]',
-			'[fd00::1]', '[fe80::1]', '[ff02::1]', '[2001:db8::1]', '[100::1]',
+			'[fd00::1]', '[fe80::1]', '[ff02::1]', '[2001:db8::1]', '[100::1]', '[::ffff:0:7f00:1]',
 		]) {
 			assert.equal(isBlockedHost(host), true, host);
 		}
 	});
 
 	test('public addresses and names pass', () => {
-		for (const host of ['[2606:4700:4700::1111]', '[::ffff:8.8.8.8]', '8.8.8.8', 'data.llantas.whitelabel.lat']) {
+		for (const host of ['[2606:4700:4700::1111]', '[::ffff:8.8.8.8]', '8.8.8.8', '192.0.78.9', 'data.llantas.whitelabel.lat']) {
 			assert.equal(isBlockedHost(host), false, host);
 		}
 	});
@@ -247,6 +251,36 @@ describe('attachments', () => {
 		for (const url of ['http://localhost:5678/x', 'http://127.0.0.1/x', 'http://10.0.0.5/x', 'http://192.168.1.1/x', 'http://[::1]/x', 'http://redis:6379/x', 'http://n8n_db/x', 'http://2130706433/x', 'http://printer.local/x', 'ftp://files.test/x', 'https://user:pass@files.test/x']) {
 			await assert.rejects(execute({ ...base, fileSource: 'url', fileUrl: url }, route), /private or local address|must start with http|not valid/, url);
 		}
+	});
+
+	test('a public name that resolves to a private address is refused', async () => {
+		setHostResolver(async (host) => (host === '127.0.0.1.nip.io' ? ['127.0.0.1'] : ['93.184.216.34']));
+		try {
+			await assert.rejects(
+				execute({ ...base, fileSource: 'url', fileUrl: 'http://127.0.0.1.nip.io/x.png' }, route),
+				/private or local address/,
+			);
+		} finally {
+			setHostResolver(async () => ['93.184.216.34']);
+		}
+	});
+
+	test('a declared size above 40 MB is refused before reading', async () => {
+		const url = 'https://img.test/huge.mp4';
+		await assert.rejects(
+			execute({ ...base, fileSource: 'url', fileUrl: url }, route, {
+				downloads: { [url]: { status: 200, body: Buffer.from('x'), headers: { 'content-length': String(41 * 1024 * 1024) } } },
+			}),
+			/larger than 40 MB/,
+		);
+	});
+
+	test('a redirect without a new address says so', async () => {
+		const url = 'https://img.test/moved';
+		await assert.rejects(
+			execute({ ...base, fileSource: 'url', fileUrl: url }, route, { downloads: { [url]: { status: 304 } } }),
+			/HTTP 304 without a new address/,
+		);
 	});
 
 	test('a binary field still works as before', async () => {

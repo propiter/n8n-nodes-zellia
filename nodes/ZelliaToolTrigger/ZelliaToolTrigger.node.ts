@@ -59,7 +59,8 @@ export class ZelliaToolTrigger implements INodeType {
 			{
 				name: 'default',
 				httpMethod: '={{$parameter["httpMethod"]}}',
-				responseMode: '={{$parameter["responseMode"]}}',
+				// Respond to Webhook only accepts built-in triggers, so the last node answers Captain
+				responseMode: 'lastNode',
 				path: '={{$parameter["path"]}}',
 				isFullPath: true,
 			},
@@ -67,7 +68,7 @@ export class ZelliaToolTrigger implements INodeType {
 		properties: [
 			{
 				displayName:
-					'In Zellia, open Captain → Tools, create a custom tool and paste the production URL of this node as its endpoint. Use the same HTTP method here and in the tool.',
+					'In Zellia, open Captain → Tools, create a custom tool and paste the production URL of this node as its endpoint. Captain sends parameters only if the tool defines them: in a request template for POST, or as {{name}} placeholders in the URL for GET. The data of the last node is the answer Captain reads.',
 				name: 'setupNotice',
 				type: 'notice',
 				default: '',
@@ -86,30 +87,18 @@ export class ZelliaToolTrigger implements INodeType {
 				name: 'httpMethod',
 				type: 'options',
 				options: [
-					{ name: 'GET', value: 'GET', description: 'Captain sends the parameters in the URL' },
-					{ name: 'POST', value: 'POST', description: 'Captain sends the parameters as JSON' },
+					{
+						name: 'GET',
+						value: 'GET',
+						description: 'Parameters come from the {{name}} placeholders in the tool URL',
+					},
+					{
+						name: 'POST',
+						value: 'POST',
+						description: 'Parameters come from the JSON request template of the tool',
+					},
 				],
 				default: 'POST',
-			},
-			{
-				displayName: 'Respond',
-				name: 'responseMode',
-				type: 'options',
-				options: [
-					{
-						name: 'When Last Node Finishes',
-						value: 'lastNode',
-						description: 'The assistant receives the data of the last node that runs',
-					},
-					{
-						name: "Using 'Respond to Webhook' Node",
-						value: 'responseNode',
-						description: 'You choose the answer with a Respond to Webhook node',
-					},
-				],
-				default: 'lastNode',
-				description:
-					'Captain reads the answer as the tool result. Keep it short and written for the assistant.',
 			},
 			{
 				displayName: 'Authentication',

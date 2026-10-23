@@ -130,10 +130,16 @@ async function findDealForConversation(
 	const open = deals.find((deal) => deal.status === 'open');
 	if (open) return { dealId: Number(open.id) };
 
-	const done = deals.find(
-		(deal) =>
-			deal.status === target &&
-			Number((deal.active_conversation as IDataObject | undefined)?.id) === conversationId,
+	// Linked deals include the ones where this conversation is not the main one
+	const linked = await zelliaApiRequest.call(
+		this,
+		'GET',
+		`/contacts/${contactId}/pipeline_items`,
+		undefined,
+		{ conversation_id: conversationId },
+	);
+	const done = asArray(linked.payload).find(
+		(deal) => Number(deal.pipeline_id) === pipelineId && deal.status === target,
 	);
 	if (done) {
 		return {

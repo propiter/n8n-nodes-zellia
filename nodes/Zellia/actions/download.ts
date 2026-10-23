@@ -1,8 +1,13 @@
+import { promises as dns } from 'dns';
+import type { Readable } from 'stream';
+
 import type { IExecuteFunctions, IN8nHttpFullResponse } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 
 // Zellia rejects uploads above MAXIMUM_FILE_UPLOAD_SIZE, 40 MB by default
 export const MAX_ATTACHMENT_BYTES = 40 * 1024 * 1024;
+
+const MAX_REDIRECTS = 3;
 
 const MIME_BY_EXTENSION: Record<string, string> = {
 	jpg: 'image/jpeg',
@@ -23,18 +28,43 @@ export interface DownloadedFile {
 	mimeType: string;
 }
 
+/** Resolves a hostname to all its addresses. Replaceable in tests. */
+export type HostResolver = (hostname: string) => Promise<string[]>;
+
+const defaultResolver: HostResolver = async (hostname) =>
+	(await dns.lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+
+let resolveHost: HostResolver = defaultResolver;
+
+/** Test hook: swap the DNS resolver. Pass nothing to restore the real one. */
+export function setHostResolver(resolver?: HostResolver): void {
+	resolveHost = resolver ?? defaultResolver;
+}
+
 function headerValue(headers: IN8nHttpFullResponse['headers'] | undefined, name: string): string {
 	const value = headers?.[name] ?? headers?.[name.toLowerCase()];
 	return String(Array.isArray(value) ? value[0] : (value ?? ''));
 }
 
-/** File name from Content-Disposition, else the last path segment of the URL. */
+function safeDecode(value: string): string {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return value;
+	}
+}
+
+/** File name from Content-Disposition (filename* first), else the last path segment of the URL. */
 export function fileNameFrom(url: string, contentDisposition: string): string {
-	const fromHeader = contentDisposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1];
-	if (fromHeader) return decodeURIComponent(fromHeader.trim());
+	const extended = contentDisposition.match(
+		/filename\*\s*=\s*(?:[\w-]+'[^']*')?"?([^";]+)"?/i,
+	)?.[1];
+	const plain = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1];
+	const fromHeader = extended ?? plain;
+	if (fromHeader) return safeDecode(fromHeader.trim());
 	try {
 		const segment = new URL(url).pathname.split('/').filter(Boolean).pop();
-		if (segment) return decodeURIComponent(segment);
+		if (segment) return safeDecode(segment);
 	} catch {
 		// Not a parseable URL: fall through to the generic name
 	}
@@ -48,10 +78,8 @@ export function mimeTypeFrom(contentType: string, fileName: string): string {
 	return MIME_BY_EXTENSION[extension] ?? (declared || 'application/octet-stream');
 }
 
-const MAX_REDIRECTS = 3;
-
 function ipv4Blocked(parts: number[]): boolean {
-	const [a, b] = parts;
+	const [a, b, c] = parts;
 	return (
 		a === 0 ||
 		a === 10 ||
@@ -60,8 +88,10 @@ function ipv4Blocked(parts: number[]): boolean {
 		(a === 169 && b === 254) ||
 		(a === 172 && b >= 16 && b <= 31) ||
 		(a === 192 && b === 168) ||
-		(a === 192 && b === 0) ||
+		(a === 192 && b === 0 && (c === 0 || c === 2)) ||
 		(a === 198 && (b === 18 || b === 19)) ||
+		(a === 198 && b === 51 && c === 100) ||
+		(a === 203 && b === 0 && c === 113) ||
 		a >= 224
 	);
 }
@@ -101,7 +131,7 @@ function startsWith(bytes: number[], prefix: number[]): boolean {
 
 /**
  * Blocks IPv6 ranges that reach local networks, including the transition formats that
- * carry an IPv4 address inside (IPv4-mapped and compatible, NAT64, 6to4 and Teredo).
+ * carry an IPv4 address inside (IPv4-mapped, IPv4-translated, compatible, NAT64, 6to4, Teredo).
  */
 function ipv6Blocked(address: string): boolean {
 	const bytes = parseIpv6(address);
@@ -110,6 +140,7 @@ function ipv6Blocked(address: string): boolean {
 	if (startsWith(bytes, [...zeros(10), 0xff, 0xff])) return ipv4Blocked(bytes.slice(12));
 	return (
 		startsWith(bytes, zeros(12)) || // ::/96: unspecified, loopback and IPv4-compatible
+		startsWith(bytes, [...zeros(8), 0xff, 0xff, 0, 0]) || // ::ffff:0:0/96 IPv4-translated
 		startsWith(bytes, [0x00, 0x64, 0xff, 0x9b]) || // 64:ff9b::/96 and 64:ff9b:1::/48 (NAT64)
 		startsWith(bytes, [0x01, 0x00, ...zeros(6)]) || // 100::/64 discard
 		startsWith(bytes, [0x20, 0x02]) || // 2002::/16 (6to4)
@@ -121,10 +152,17 @@ function ipv6Blocked(address: string): boolean {
 	);
 }
 
+/** True for an IP literal (v4 or v6) inside a private, local or reserved range. */
+export function isBlockedIp(address: string): boolean {
+	const host = address.replace(/^\[|\]$/g, '');
+	const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+	if (ipv4) return ipv4Blocked(ipv4.slice(1).map(Number));
+	return host.includes(':') ? ipv6Blocked(host) : true;
+}
+
 /**
- * Rejects destinations inside the server's network: names without a public domain and
- * private, loopback, link-local (cloud metadata) and reserved IPs. Hostnames that resolve
- * to private IPs need the instance-level N8N_SSRF_PROTECTION_ENABLED, which this node respects.
+ * Rejects hostnames inside the server's network by name: localhost, local suffixes,
+ * names without a public domain, and private IP literals.
  */
 export function isBlockedHost(hostname: string): boolean {
 	const host = hostname
@@ -133,17 +171,12 @@ export function isBlockedHost(hostname: string): boolean {
 		.replace(/\.$/, '');
 	if (!host) return true;
 	if (host === 'localhost' || /\.(localhost|local|internal|lan|home|corp)$/.test(host)) return true;
-
-	const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-	if (ipv4) return ipv4Blocked(ipv4.slice(1).map(Number));
-
-	if (host.includes(':')) return ipv6Blocked(host);
-
+	if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return isBlockedIp(host);
 	// A name without a dot is a local or container service name, such as "redis"
 	return !host.includes('.');
 }
 
-function assertAllowedUrl(this: IExecuteFunctions, rawUrl: string, i: number): URL {
+async function assertAllowedUrl(this: IExecuteFunctions, rawUrl: string, i: number): Promise<URL> {
 	let url: URL;
 	try {
 		url = new URL(rawUrl);
@@ -154,22 +187,56 @@ function assertAllowedUrl(this: IExecuteFunctions, rawUrl: string, i: number): U
 		throw new NodeOperationError(
 			this.getNode(),
 			'The file URL must start with http:// or https://',
-			{
-				itemIndex: i,
-			},
+			{ itemIndex: i },
 		);
 	}
-	if (url.username || url.password || isBlockedHost(url.hostname)) {
-		throw new NodeOperationError(
-			this.getNode(),
-			'The file URL points to a private or local address',
-			{
+	const refuse = () =>
+		new NodeOperationError(this.getNode(), 'The file URL points to a private or local address', {
+			itemIndex: i,
+			description: 'Only public files can be sent. Use a binary field for internal files.',
+		});
+	if (url.username || url.password || isBlockedHost(url.hostname)) throw refuse();
+
+	// A public name can still point to a private address, so check every address it resolves to
+	const host = url.hostname.replace(/^\[|\]$/g, '');
+	if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host) && !host.includes(':')) {
+		let addresses: string[];
+		try {
+			addresses = await resolveHost(host);
+		} catch {
+			throw new NodeOperationError(this.getNode(), 'Could not resolve the file URL', {
 				itemIndex: i,
-				description: 'Only public files can be sent. Use a binary field for internal files.',
-			},
-		);
+				description: `Host: ${host}`,
+			});
+		}
+		if (!addresses.length || addresses.some(isBlockedIp)) throw refuse();
 	}
 	return url;
+}
+
+/** Reads a response stream, stopping as soon as it passes the size limit. */
+async function readLimited(this: IExecuteFunctions, stream: Readable, i: number): Promise<Buffer> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of stream) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+		size += buffer.length;
+		if (size > MAX_ATTACHMENT_BYTES) {
+			stream.destroy();
+			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
+				itemIndex: i,
+				description: 'Zellia does not accept attachments above 40 MB.',
+			});
+		}
+		chunks.push(buffer);
+	}
+	return Buffer.concat(chunks);
+}
+
+function toStream(body: unknown): Readable | undefined {
+	return body && typeof (body as Readable)[Symbol.asyncIterator] === 'function'
+		? (body as Readable)
+		: undefined;
 }
 
 /** Downloads a public file so it can be uploaded to Zellia, which does not accept URLs. */
@@ -179,75 +246,80 @@ export async function downloadFile(
 	i: number,
 	fileNameOverride = '',
 ): Promise<DownloadedFile> {
-	let url = assertAllowedUrl.call(this, rawUrl, i);
-	let response: IN8nHttpFullResponse | undefined;
+	let url = await assertAllowedUrl.call(this, rawUrl, i);
+	const fail = (message: string) =>
+		new NodeOperationError(this.getNode(), message, {
+			itemIndex: i,
+			description: `URL: ${rawUrl}`,
+		});
 
 	// Redirects are followed by hand so every hop is checked before it is requested
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		let response: IN8nHttpFullResponse;
 		try {
 			response = (await this.helpers.httpRequest({
 				method: 'GET',
 				url: url.toString(),
-				encoding: 'arraybuffer',
+				encoding: 'stream',
 				returnFullResponse: true,
 				disableFollowRedirect: true,
 				ignoreHttpStatusErrors: true,
 				timeout: 30000,
 			})) as IN8nHttpFullResponse;
 		} catch {
-			throw new NodeOperationError(this.getNode(), 'Could not download the file', {
-				itemIndex: i,
-				description: `URL: ${rawUrl}`,
-			});
+			throw fail('Could not download the file');
 		}
+		const stream = toStream(response.body);
 		const status = Number(response.statusCode);
+
 		if (status >= 300 && status < 400) {
+			stream?.destroy();
 			const location = headerValue(response.headers, 'location');
-			if (!location || hop === MAX_REDIRECTS) {
-				throw new NodeOperationError(
-					this.getNode(),
-					'Could not download the file (too many redirects)',
-					{
-						itemIndex: i,
-						description: `URL: ${rawUrl}`,
-					},
-				);
+			if (!location)
+				throw fail(`Could not download the file (HTTP ${status} without a new address)`);
+			if (hop === MAX_REDIRECTS) throw fail('Could not download the file (too many redirects)');
+			let next: string;
+			try {
+				next = new URL(location, url).toString();
+			} catch {
+				throw fail('Could not download the file (invalid redirect address)');
 			}
-			url = assertAllowedUrl.call(this, new URL(location, url).toString(), i);
+			url = await assertAllowedUrl.call(this, next, i);
 			continue;
 		}
 		if (status < 200 || status >= 300) {
-			throw new NodeOperationError(this.getNode(), `Could not download the file (HTTP ${status})`, {
+			stream?.destroy();
+			throw fail(`Could not download the file (HTTP ${status})`);
+		}
+
+		const declaredSize = Number(headerValue(response.headers, 'content-length'));
+		if (Number.isFinite(declaredSize) && declaredSize > MAX_ATTACHMENT_BYTES) {
+			stream?.destroy();
+			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
 				itemIndex: i,
-				description: `URL: ${rawUrl}`,
+				description: 'Zellia does not accept attachments above 40 MB.',
 			});
 		}
-		break;
-	}
 
-	const body = response?.body as unknown;
-	const data = Buffer.isBuffer(body)
-		? body
-		: Buffer.from((body ?? new ArrayBuffer(0)) as ArrayBuffer);
-	if (data.length === 0) {
-		throw new NodeOperationError(this.getNode(), 'The downloaded file is empty', {
-			itemIndex: i,
-			description: `URL: ${rawUrl}`,
-		});
-	}
-	if (data.length > MAX_ATTACHMENT_BYTES) {
-		throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
-			itemIndex: i,
-			description: 'Zellia does not accept attachments above 40 MB.',
-		});
-	}
+		const data = stream
+			? await readLimited.call(this, stream, i)
+			: Buffer.from((response.body ?? []) as Uint8Array);
+		if (data.length === 0) throw fail('The downloaded file is empty');
+		if (data.length > MAX_ATTACHMENT_BYTES) {
+			throw new NodeOperationError(this.getNode(), 'The file is larger than 40 MB', {
+				itemIndex: i,
+				description: 'Zellia does not accept attachments above 40 MB.',
+			});
+		}
 
-	const fileName =
-		fileNameOverride.trim() ||
-		fileNameFrom(url.toString(), headerValue(response?.headers, 'content-disposition'));
-	return {
-		data,
-		fileName,
-		mimeType: mimeTypeFrom(headerValue(response?.headers, 'content-type'), fileName),
-	};
+		const fileName =
+			fileNameOverride.trim() ||
+			fileNameFrom(url.toString(), headerValue(response.headers, 'content-disposition'));
+		return {
+			data,
+			fileName,
+			mimeType: mimeTypeFrom(headerValue(response.headers, 'content-type'), fileName),
+		};
+	}
+	throw fail('Could not download the file (too many redirects)');
 }

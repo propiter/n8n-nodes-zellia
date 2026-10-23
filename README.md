@@ -10,6 +10,10 @@ The package has three nodes:
 
 [Installation](#installation) · [Credentials](#credentials) · [Operations](#operations) · [Trigger](#zellia-trigger) · [Notes](#notes) · [Development](#development)
 
+## Requirements
+
+Self-hosted n8n. The package is not available on n8n Cloud, because the URL download check uses the Node `dns` module.
+
 ## Installation
 
 1. In n8n, open **Settings → Community Nodes**.
@@ -50,7 +54,7 @@ If a token is not allowed, the node stops with the message *This operation needs
 ### Message
 
 - **Send**: text, private note, buttons, cards, or an approved WhatsApp template with numbered or named variables. Options: quote a message, or send as a specific agent bot.
-- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool. For safety, the node downloads only from public addresses. It refuses localhost, internal names and private IPs, and it checks every redirect. To also block public names that resolve to private IPs, set `N8N_SSRF_PROTECTION_ENABLED=true` on the n8n instance.
+- **Send Attachment**: send a file with an optional caption. The file can come from a binary field or from a public **URL**. Zellia does not accept URLs, so the node downloads the file (up to 40 MB) and uploads it. With a URL, you do not need an HTTP Request node, and AI agents can send files when they use the node as a tool. For safety, the node downloads only from public addresses. It refuses localhost, internal names and private IPs, resolves the DNS name of every redirect hop, and stops a download at 40 MB. For full protection against DNS rebinding, also set `N8N_SSRF_PROTECTION_ENABLED=true` on the n8n instance.
 
 ### Conversation
 
@@ -118,7 +122,7 @@ Use it as the endpoint of a Captain custom tool.
 2. In Zellia, open **Captain → Tools**, create the tool and paste the production URL of the node.
 3. Set the same authentication in the tool and in the node: Bearer token, API key header or Basic.
 
-The output has `tool`, `account_id`, `conversation_id`, `contact_id`, `contact_phone`, `channel_type` and other fields. The tool parameters are in `params`: from the JSON body for POST tools, and from the URL for GET tools. By default, Captain receives the data of the last node as the tool result. You can also answer with a **Respond to Webhook** node.
+The output has `tool`, `account_id`, `conversation_id`, `contact_id`, `contact_phone`, `channel_type` and other fields. The tool parameters are in `params`: from the JSON body for POST tools, and from the URL for GET tools. Captain receives the data of the last node as the tool result, so end the workflow with a Set node that holds a short answer for the assistant. Captain sends parameters only when the tool defines them: in a request template for POST, or as `{{name}}` placeholders in the URL for GET.
 
 ## Notes
 

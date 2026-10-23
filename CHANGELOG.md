@@ -7,7 +7,9 @@
 - Conversation → Get Status and Get Custom Attributes, the counterparts of Set Status and Set Custom Attributes.
 - Deal → Mark as Won and Mark as Lost: new **Find Deal By → Conversation ID** option. The node finds the open deal of the contact in the pipeline. The `result` field is `won`, `lost`, `already_won`, `already_lost` or `no_deal`.
 - Message → Send Attachment: new **File Source** option. Choose **URL** to send a file from a public link. The node downloads the file and uploads it to Zellia, so you do not need an HTTP Request node first. It also works when the node is used as an AI Agent tool. **Binary Field** stays the default, so existing nodes do not change.
-- URL downloads accept only public addresses. The node refuses localhost, names without a public domain (such as container service names), and private, loopback, link-local and reserved IPs, including IPv6 forms that carry an IPv4 address (IPv4-mapped, NAT64, 6to4, Teredo). It follows at most 3 redirects and checks each hop before it requests it.
+- URL downloads accept only public addresses. The node also resolves the DNS name of every hop and refuses it when any address is private. The download is streamed and stops at 40 MB.
+- The package now targets self-hosted n8n only. The DNS check needs the Node `dns` module, which n8n Cloud does not allow.
+- URL downloads also refuse names and IPs directly: the node refuses localhost, names without a public domain (such as container service names), and private, loopback, link-local and reserved IPs, including IPv6 forms that carry an IPv4 address (IPv4-mapped, NAT64, 6to4, Teredo). It follows at most 3 redirects and checks each hop before it requests it.
 
 ## 0.1.0
 

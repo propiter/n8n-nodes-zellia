@@ -93,10 +93,16 @@ describe('conversation status', () => {
 			{ status: items[0].status, handled_by: items[0].handled_by, assignee: items[0].assignee_name, team: items[0].team_name, priority: items[0].priority },
 			{ status: 'open', handled_by: 'agent', assignee: 'Ana', team: 'Ventas', priority: 'high' },
 		);
-		const pending = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ status: 'pending' }));
+		const pending = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ status: 'pending', meta: {} }));
 		assert.equal(pending.items[0].handled_by, 'bot');
-		const nobody = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ meta: {} }));
+		const nobody = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ meta: {}, waiting_since: 0 }));
 		assert.equal(nobody.items[0].handled_by, 'nobody');
+		assert.equal(nobody.items[0].waiting_since, null);
+		const bot = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ meta: { assignee: { id: 12, name: 'LLANTIN' }, assignee_type: 'AgentBot' } }));
+		assert.equal(bot.items[0].handled_by, 'bot');
+		assert.equal(bot.items[0].assignee_type, 'bot');
+		const pendingHuman = await execute({ resource: 'conversation', operation: 'getStatus', conversationId: 5 }, conversation({ status: 'pending' }));
+		assert.equal(pendingHuman.items[0].handled_by, 'agent');
 	});
 
 	test('get custom attributes returns only the attributes', async () => {
@@ -110,9 +116,9 @@ describe('close a deal from a conversation', () => {
 	const params = (operation, extra = {}) => ({
 		resource: 'deal', operation, pipelineId: '2', dealLookup: 'conversation', conversationId: 40, value: 850000, currency: '', ...extra,
 	});
-	const routes = (deals, extra = {}) => ({
+	const routes = (deals, extra = {}, linked = deals) => ({
 		'GET /conversations/40': { id: 40, meta: { sender: { id: 5 } } },
-		'GET /contacts/5/pipeline_items': { payload: deals },
+		'GET /contacts/5/pipeline_items': (call) => ({ payload: call.qs && call.qs.conversation_id ? linked : deals }),
 		...extra,
 	});
 
@@ -136,12 +142,18 @@ describe('close a deal from a conversation', () => {
 		]));
 		assert.equal(items[0].result, 'already_won');
 		assert.equal(items[0].id, 7);
-		assert.equal(calls.length, 2);
+		assert.deepEqual(calls[2].qs, { conversation_id: 40 });
 	});
 
 	test('reports no deal instead of failing', async () => {
-		const { items } = await execute(params('markLost'), routes([{ id: 7, pipeline_id: 2, status: 'won', active_conversation: { id: 99 } }]));
+		const { items } = await execute(params('markLost'), routes([{ id: 7, pipeline_id: 2, status: 'won' }], {}, []));
 		assert.deepEqual(items[0], { result: 'no_deal', conversation_id: 40, contact_id: 5 });
+	});
+
+	test('a deal closed while only linked to this conversation counts as already done', async () => {
+		const { items } = await execute(params('markWon'), routes([], {}, [{ id: 8, pipeline_id: 2, status: 'won' }]));
+		assert.equal(items[0].result, 'already_won');
+		assert.equal(items[0].id, 8);
 	});
 
 	test('the deal ID mode still works and now says the result', async () => {

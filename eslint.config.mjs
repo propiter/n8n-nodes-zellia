@@ -1,3 +1,5 @@
-import { config } from '@n8n/node-cli/eslint';
+import { configWithoutCloudSupport } from '@n8n/node-cli/eslint';
 
-export default config;
+// The URL download resolves DNS to refuse private addresses, which needs the Node dns module.
+// n8n Cloud does not allow that module, so this package targets self-hosted n8n only.
+export default configWithoutCloudSupport;
