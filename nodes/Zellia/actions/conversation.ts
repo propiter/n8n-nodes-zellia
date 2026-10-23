@@ -1,5 +1,5 @@
-import type { IDataObject, IExecuteFunctions } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import type { IDataObject, IExecuteFunctions, JsonObject } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 
 import {
 	asArray,
@@ -12,6 +12,34 @@ import {
 	zelliaApiRequestAllItems,
 } from '../GenericFunctions';
 import { buildMessageBody, postMessage } from './message';
+
+/** The parts of a conversation that answer "where is it and who has it". */
+export function summarizeStatus(conversation: IDataObject): IDataObject {
+	const meta = (conversation.meta as IDataObject | undefined) ?? {};
+	const assignee = meta.assignee as IDataObject | undefined;
+	const team = meta.team as IDataObject | undefined;
+	const assigneeType = String(meta.assignee_type ?? '');
+	// Pending means a bot is answering; otherwise an assigned agent or nobody has it
+	const handledBy =
+		conversation.status === 'pending' || assigneeType === 'AgentBot'
+			? 'bot'
+			: assignee?.id
+				? 'agent'
+				: 'nobody';
+	return {
+		conversation_id: conversation.id,
+		status: conversation.status ?? null,
+		handled_by: handledBy,
+		snoozed_until: conversation.snoozed_until ?? null,
+		priority: conversation.priority ?? null,
+		assignee_id: assignee?.id ?? null,
+		assignee_name: assignee?.name ?? null,
+		team_id: team?.id ?? null,
+		team_name: team?.name ?? null,
+		labels: Array.isArray(conversation.labels) ? conversation.labels : [],
+		waiting_since: conversation.waiting_since ?? null,
+	};
+}
 
 async function getLabels(this: IExecuteFunctions, conversationId: number): Promise<string[]> {
 	const response = await zelliaApiRequest.call(
@@ -116,6 +144,99 @@ async function startOutbound(this: IExecuteFunctions, i: number): Promise<IDataO
 	return { contact, contactCreated, conversation, conversationCreated, message };
 }
 
+/** Runs the hand-off steps in order: message, note, labels, team, agent, status. */
+async function handOff(this: IExecuteFunctions, conversationId: number, i: number) {
+	const continueOnError = this.getNodeParameter('handOffContinueOnError', i, false) as boolean;
+	const path = `/conversations/${conversationId}`;
+	const result: IDataObject = { conversation_id: conversationId };
+	const errors: IDataObject = {};
+
+	const step = async (name: string, run: () => Promise<unknown>) => {
+		try {
+			result[name] = (await run()) as IDataObject[keyof IDataObject];
+		} catch (error) {
+			if (!continueOnError) {
+				if (error instanceof NodeApiError)
+					throw new NodeApiError(this.getNode(), error as unknown as JsonObject);
+				throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+			}
+			errors[name] = (error as Error).message;
+		}
+	};
+
+	const message = String(this.getNodeParameter('handOffMessage', i, '') ?? '');
+	if (message.trim()) {
+		await step(
+			'message',
+			async () =>
+				await postMessage.call(this, conversationId, {
+					content: message,
+					message_type: 'outgoing',
+				}),
+		);
+	}
+
+	const note = String(this.getNodeParameter('handOffNote', i, '') ?? '');
+	if (note.trim()) {
+		await step(
+			'note',
+			async () =>
+				await postMessage.call(this, conversationId, {
+					content: note,
+					message_type: 'outgoing',
+					private: true,
+				}),
+		);
+	}
+
+	const labels = parseLabels(this.getNodeParameter('handOffLabels', i, []));
+	const labelMode = this.getNodeParameter('handOffLabelMode', i, 'add') as string;
+	if (labels.length || labelMode === 'replace') {
+		await step('labels', async () => {
+			if (labelMode === 'replace')
+				return (await saveLabels.call(this, conversationId, labels)).labels;
+			const current = await getLabels.call(this, conversationId);
+			const next =
+				labelMode === 'remove'
+					? current.filter((label) => !labels.includes(label))
+					: parseLabels([...current, ...labels]);
+			return (await saveLabels.call(this, conversationId, next)).labels;
+		});
+	}
+
+	const teamId = Number(this.getNodeParameter('handOffTeamId', i, '') || 0);
+	if (teamId > 0) {
+		await step(
+			'team',
+			async () =>
+				await zelliaApiRequest.call(this, 'POST', `${path}/assignments`, { team_id: teamId }),
+		);
+	}
+
+	const agentId = Number(this.getNodeParameter('handOffAgentId', i, '') || 0);
+	if (agentId > 0) {
+		await step(
+			'assignee',
+			async () =>
+				await zelliaApiRequest.call(this, 'POST', `${path}/assignments`, { assignee_id: agentId }),
+		);
+	}
+
+	const status = this.getNodeParameter('handOffStatus', i, 'open') as string;
+	if (status !== 'keep') {
+		await step(
+			'status',
+			async () =>
+				unwrapPayload(
+					await zelliaApiRequest.call(this, 'POST', `${path}/toggle_status`, { status }),
+				).current_status,
+		);
+	}
+
+	if (Object.keys(errors).length) result.errors = errors;
+	return result;
+}
+
 export async function executeConversation(
 	this: IExecuteFunctions,
 	operation: string,
@@ -166,6 +287,19 @@ export async function executeConversation(
 	switch (operation) {
 		case 'get':
 			return await zelliaApiRequest.call(this, 'GET', path);
+
+		case 'getStatus': {
+			const conversation = await zelliaApiRequest.call(this, 'GET', path);
+			return summarizeStatus(conversation);
+		}
+
+		case 'getAttributes': {
+			const conversation = await zelliaApiRequest.call(this, 'GET', path);
+			return {
+				conversation_id: conversationId,
+				custom_attributes: (conversation.custom_attributes as IDataObject | undefined) ?? {},
+			};
+		}
 
 		case 'getLabels':
 			return {
@@ -257,6 +391,9 @@ export async function executeConversation(
 
 		case 'getMessages':
 			return await getMessages.call(this, conversationId, i);
+
+		case 'handOff':
+			return await handOff.call(this, conversationId, i);
 	}
 
 	throw new NodeOperationError(this.getNode(), `Unknown operation "${operation}"`, {

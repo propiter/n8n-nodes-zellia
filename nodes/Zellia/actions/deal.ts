@@ -51,7 +51,7 @@ async function markWon(
 	i: number,
 ): Promise<IDataObject> {
 	const deal = await getDeal.call(this, itemsPath, dealId);
-	if (deal.status === 'won') return { ...deal, alreadyInStage: true };
+	if (deal.status === 'won') return { ...deal, alreadyInStage: true, result: 'already_won' };
 
 	const value = this.getNodeParameter('value', i, 0) as number;
 	const currency = String(this.getNodeParameter('currency', i, '') ?? '')
@@ -78,7 +78,74 @@ async function markWon(
 	return {
 		...(await moveDeal.call(this, itemsPath, dealId, Number(wonStage.id))),
 		alreadyInStage: false,
+		result: 'won',
 	};
+}
+
+async function markLost(
+	this: IExecuteFunctions,
+	pipelineId: number,
+	itemsPath: string,
+	dealId: number,
+	i: number,
+): Promise<IDataObject> {
+	const deal = await getDeal.call(this, itemsPath, dealId);
+	if (deal.status === 'lost') return { ...deal, alreadyInStage: true, result: 'already_lost' };
+	const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
+	return {
+		...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
+		alreadyInStage: false,
+		result: 'lost',
+	};
+}
+
+/**
+ * Finds the deal to close from a conversation: the contact's open deal in the pipeline.
+ * When there is none, returns the output to send instead (already closed here, or no deal).
+ */
+async function findDealForConversation(
+	this: IExecuteFunctions,
+	pipelineId: number,
+	target: 'won' | 'lost',
+	i: number,
+): Promise<{ dealId: number; output?: undefined } | { dealId?: undefined; output: IDataObject }> {
+	const conversationId = this.getNodeParameter('conversationId', i) as number;
+	const conversation = await zelliaApiRequest.call(this, 'GET', `/conversations/${conversationId}`);
+	const sender = (conversation.meta as IDataObject | undefined)?.sender as IDataObject | undefined;
+	const contactId = Number(sender?.id);
+	if (!Number.isFinite(contactId) || contactId <= 0) {
+		throw new NodeOperationError(this.getNode(), 'The conversation has no contact', {
+			itemIndex: i,
+		});
+	}
+
+	const response = await zelliaApiRequest.call(
+		this,
+		'GET',
+		`/contacts/${contactId}/pipeline_items`,
+	);
+	const deals = asArray(response.payload).filter((deal) => Number(deal.pipeline_id) === pipelineId);
+
+	// Zellia allows one open deal per contact in each pipeline
+	const open = deals.find((deal) => deal.status === 'open');
+	if (open) return { dealId: Number(open.id) };
+
+	const done = deals.find(
+		(deal) =>
+			deal.status === target &&
+			Number((deal.active_conversation as IDataObject | undefined)?.id) === conversationId,
+	);
+	if (done) {
+		return {
+			output: {
+				...done,
+				alreadyInStage: true,
+				result: `already_${target}`,
+				conversation_id: conversationId,
+			},
+		};
+	}
+	return { output: { result: 'no_deal', conversation_id: conversationId, contact_id: contactId } };
 }
 
 async function createDeal(
@@ -207,6 +274,21 @@ export async function executeDeal(
 		);
 	}
 
+	if (operation === 'markWon' || operation === 'markLost') {
+		const target = operation === 'markWon' ? 'won' : 'lost';
+		let dealId: number;
+		if (this.getNodeParameter('dealLookup', i, 'dealId') === 'conversation') {
+			const found = await findDealForConversation.call(this, pipelineId, target, i);
+			if (found.output) return found.output;
+			dealId = found.dealId;
+		} else {
+			dealId = this.getNodeParameter('dealId', i) as number;
+		}
+		return operation === 'markWon'
+			? await markWon.call(this, pipelineId, itemsPath, dealId, i)
+			: await markLost.call(this, pipelineId, itemsPath, dealId, i);
+	}
+
 	const dealId = this.getNodeParameter('dealId', i) as number;
 
 	switch (operation) {
@@ -244,19 +326,6 @@ export async function executeDeal(
 				dealId,
 				Number(this.getNodeParameter('stageId', i)),
 			);
-
-		case 'markWon':
-			return await markWon.call(this, pipelineId, itemsPath, dealId, i);
-
-		case 'markLost': {
-			const deal = await getDeal.call(this, itemsPath, dealId);
-			if (deal.status === 'lost') return { ...deal, alreadyInStage: true };
-			const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
-			return {
-				...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
-				alreadyInStage: false,
-			};
-		}
 
 		case 'linkConversation': {
 			const conversationId = this.getNodeParameter('conversationId', i) as number;

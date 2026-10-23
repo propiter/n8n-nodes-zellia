@@ -101,7 +101,9 @@ const withPipeline = [
 	'update',
 ];
 
-const withDeal = withPipeline.filter((operation) => !['create', 'getAll'].includes(operation));
+const withDeal = withPipeline.filter(
+	(operation) => !['create', 'getAll', 'markWon', 'markLost'].includes(operation),
+);
 
 export const dealFields: INodeProperties[] = [
 	{
@@ -122,6 +124,44 @@ export const dealFields: INodeProperties[] = [
 		required: true,
 		default: 0,
 		displayOptions: { show: { resource: R, operation: withDeal } },
+	},
+	{
+		displayName: 'Find Deal By',
+		name: 'dealLookup',
+		type: 'options',
+		noDataExpression: true,
+		options: [
+			{ name: 'Deal ID', value: 'dealId' },
+			{
+				name: 'Conversation ID',
+				value: 'conversation',
+				description:
+					'The open deal of the contact of the conversation in this pipeline. The result field says won, already done or no deal.',
+			},
+		],
+		default: 'dealId',
+		displayOptions: { show: { resource: R, operation: ['markWon', 'markLost'] } },
+	},
+	{
+		displayName: 'Deal ID',
+		name: 'dealId',
+		type: 'number',
+		required: true,
+		default: 0,
+		displayOptions: {
+			show: { resource: R, operation: ['markWon', 'markLost'], dealLookup: ['dealId'] },
+		},
+	},
+	{
+		displayName: 'Conversation ID',
+		name: 'conversationId',
+		type: 'number',
+		required: true,
+		default: 0,
+		displayOptions: {
+			show: { resource: R, operation: ['markWon', 'markLost'], dealLookup: ['conversation'] },
+		},
+		description: 'Number of the conversation, as shown in the Zellia URL',
 	},
 
 	// Move

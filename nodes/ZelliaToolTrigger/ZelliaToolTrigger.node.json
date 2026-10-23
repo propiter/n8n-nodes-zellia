@@ -1,0 +1,10 @@
+{
+	"node": "n8n-nodes-zellia.zelliaToolTrigger",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Communication", "Sales"],
+	"resources": {
+		"credentialDocumentation": [{ "url": "https://github.com/propiter/n8n-nodes-zellia#readme" }],
+		"primaryDocumentation": [{ "url": "https://github.com/propiter/n8n-nodes-zellia#readme" }]
+	}
+}

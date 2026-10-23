@@ -41,7 +41,8 @@
     ],
     "nodes": [
       "dist/nodes/Zellia/Zellia.node.js",
-      "dist/nodes/ZelliaTrigger/ZelliaTrigger.node.js"
+      "dist/nodes/ZelliaTrigger/ZelliaTrigger.node.js",
+      "dist/nodes/ZelliaToolTrigger/ZelliaToolTrigger.node.js"
     ]
   },
   "devDependencies": {

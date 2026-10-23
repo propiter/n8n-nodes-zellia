@@ -36,6 +36,11 @@ export const conversationOperations: INodeProperties[] = [
 				action: 'Get a conversation',
 			},
 			{
+				name: 'Get Custom Attributes',
+				value: 'getAttributes',
+				action: 'Get the custom attributes of a conversation',
+			},
+			{
 				name: 'Get Labels',
 				value: 'getLabels',
 				action: 'Get the labels of a conversation',
@@ -51,6 +56,20 @@ export const conversationOperations: INodeProperties[] = [
 				value: 'getMessages',
 				description: 'List the messages of a conversation. Needs an agent token.',
 				action: 'Get the messages of a conversation',
+			},
+			{
+				name: 'Get Status',
+				value: 'getStatus',
+				description:
+					'Status, who handles it (bot, agent or nobody), assigned agent and team, priority and labels',
+				action: 'Get the status of a conversation',
+			},
+			{
+				name: 'Hand Off',
+				value: 'handOff',
+				description:
+					'In one step: message the contact, leave a private note, set labels, assign and change the status',
+				action: 'Hand off a conversation',
 			},
 			{
 				name: 'Remove Labels',
@@ -96,7 +115,10 @@ const withId = [
 	'addLabels',
 	'assign',
 	'get',
+	'getAttributes',
 	'getLabels',
+	'getStatus',
+	'handOff',
 	'getMessages',
 	'removeLabels',
 	'setAttributes',
@@ -114,6 +136,94 @@ export const conversationFields: INodeProperties[] = [
 		default: 0,
 		displayOptions: { show: { resource: R, operation: withId } },
 		description: 'Number of the conversation, as shown in the Zellia URL',
+	},
+
+	// Hand off
+	{
+		displayName: 'Message to Contact',
+		name: 'handOffMessage',
+		type: 'string',
+		typeOptions: { rows: 3 },
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description: 'Optional. Sent first, as a normal message the contact sees.',
+	},
+	{
+		displayName: 'Private Note',
+		name: 'handOffNote',
+		type: 'string',
+		typeOptions: { rows: 3 },
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description: 'Optional. Internal note for the agents, such as a summary of the chat.',
+	},
+	{
+		displayName: 'Label Names or IDs',
+		name: 'handOffLabels',
+		type: 'multiOptions',
+		typeOptions: { loadOptionsMethod: 'getLabels' },
+		default: [],
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description:
+			'Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+	},
+	{
+		displayName: 'Label Mode',
+		name: 'handOffLabelMode',
+		type: 'options',
+		options: [
+			{ name: 'Add', value: 'add', description: 'Add the labels and keep the others' },
+			{ name: 'Remove', value: 'remove', description: 'Remove the labels and keep the others' },
+			{ name: 'Replace', value: 'replace', description: 'Keep only these labels' },
+		],
+		default: 'add',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+	},
+	{
+		displayName: 'Agent Name or ID',
+		name: 'handOffAgentId',
+		type: 'options',
+		typeOptions: { loadOptionsMethod: 'getAgents' },
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description:
+			'Optional. Leave empty to keep the current agent. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+	{
+		displayName: 'Team Name or ID',
+		name: 'handOffTeamId',
+		type: 'options',
+		typeOptions: { loadOptionsMethod: 'getTeams' },
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description:
+			'Optional. Leave empty to keep the current team. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
+	{
+		displayName: 'Status After',
+		name: 'handOffStatus',
+		type: 'options',
+		options: [
+			{ name: 'Keep Current', value: 'keep' },
+			{
+				name: 'Open',
+				value: 'open',
+				description: 'Hands the chat to the human agents. A bot leaves the conversation.',
+			},
+			{ name: 'Pending', value: 'pending' },
+			{ name: 'Resolved', value: 'resolved' },
+		],
+		default: 'open',
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+	},
+	{
+		displayName: 'Continue If a Step Fails',
+		name: 'handOffContinueOnError',
+		type: 'boolean',
+		default: false,
+		displayOptions: { show: { resource: R, operation: ['handOff'] } },
+		description:
+			'Whether to run the other steps when one fails. The failed steps are listed in the errors field of the output.',
 	},
 
 	// Labels

@@ -2,10 +2,11 @@
 
 n8n community nodes for [Zellia](https://zellia.io). Use them to send messages, manage conversations, contacts and deals, and start workflows from Zellia events. You set parameters in the node. You do not write HTTP requests or JSON bodies.
 
-The package has two nodes:
+The package has three nodes:
 
 - **Zellia**: actions on messages, conversations, contacts, deals and pipelines. It can also be used as a tool by the n8n AI Agent.
 - **Zellia Trigger**: starts a workflow when something happens in Zellia.
+- **Zellia Captain Tool Trigger**: receives the calls of Captain custom tools, with the conversation and contact already read.
 
 [Installation](#installation) · [Credentials](#credentials) · [Operations](#operations) · [Trigger](#zellia-trigger) · [Notes](#notes) · [Development](#development)
 
@@ -53,7 +54,8 @@ If a token is not allowed, the node stops with the message *This operation needs
 
 ### Conversation
 
-- **Get**, **Get Many** (filters: status, assignee, inbox, team, labels, text), **Get Messages**
+- **Get**, **Get Status** (status, whether a bot, an agent or nobody handles it, agent, team, priority and labels), **Get Labels**, **Get Custom Attributes**, **Get Messages**, **Get Many** (filters: status, assignee, inbox, team, labels, text)
+- **Hand Off**: in one step, sends a message to the contact, leaves a private note, adds, removes or replaces labels, assigns an agent or a team, and changes the status. Every field is optional. With **Continue If a Step Fails**, the other steps still run and the failed ones are listed in `errors`.
 - **Create** for an existing contact
 - **Start Outbound**: finds the contact by phone number, or creates it. Then it reuses an open conversation in the inbox, or creates one, and sends the first message (text or template). One node replaces the search → create → open → send chain.
 - **Set Status** (open, pending, resolved, snoozed), **Set Priority**
@@ -71,6 +73,7 @@ Phone numbers are normalized to E.164: `+57 300-123 4567` becomes `+573001234567
 ### Deal
 
 - **Find for Contact or Conversation**: finds deals from a conversation ID or a contact ID. Optional filters: pipeline, status, and only deals linked to the conversation.
+- **Mark as Won** and **Mark as Lost** can find the deal by **Deal ID** or by **Conversation ID**. With a conversation, the node uses the open deal of the contact in the pipeline. The `result` field says `won`, `lost`, `already_won`, `already_lost` or `no_deal`, so a Switch node can branch on it.
 - **Mark as Won**: sets the amount, if given, then moves the deal to the won stage of its pipeline. Zellia requires an amount above 0. If you leave the amount at 0, the node keeps the current amount. If the deal is already won, nothing changes and the output has `alreadyInStage: true`.
 - **Mark as Lost**: moves the deal to the lost stage of its pipeline.
 - **Move to Stage**: pick the stage from the list.
@@ -106,6 +109,16 @@ Automation rules do not sign their requests, so the node requires a **Secret Tok
 - **Message Filters**: by default, only incoming messages from the contact start the workflow. Private notes and messages from agent bots and Captain are skipped, so a bot cannot answer itself.
 - **Required Labels**: only conversations that have at least one of the labels you list.
 - **Simplify** (on by default): the output is a flat object. For messages it has `text`, `conversation_id`, `contact_phone`, `labels`, `sender_type` and other fields. For deal events it has `deal_id`, `value` as a number, `stage_type`, `from_stage_name` and other fields. Turn Simplify off to get the raw Zellia payload.
+
+## Zellia Captain Tool Trigger
+
+Use it as the endpoint of a Captain custom tool.
+
+1. Set a **Path**, such as `send-image`, and the same HTTP method as in the tool.
+2. In Zellia, open **Captain → Tools**, create the tool and paste the production URL of the node.
+3. Set the same authentication in the tool and in the node: Bearer token, API key header or Basic.
+
+The output has `tool`, `account_id`, `conversation_id`, `contact_id`, `contact_phone`, `channel_type` and other fields. The tool parameters are in `params`: from the JSON body for POST tools, and from the URL for GET tools. By default, Captain receives the data of the last node as the tool result. You can also answer with a **Respond to Webhook** node.
 
 ## Notes
 
