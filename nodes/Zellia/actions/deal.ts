@@ -195,11 +195,14 @@ async function registerSale(
 			itemIndex: i,
 		});
 	}
-	// One locked step in Zellia: sets the amount and wins the deal. The same amount again is a no-op.
+	// Zellia answers the same to a first sale and to a repeat with the same amount, so read first
+	const before = await getDeal.call(this, itemsPath, dealId);
+	// One locked step in Zellia: sets the amount and wins the deal. The same amount again is a
+	// no-op, and a different amount on a won deal is refused by the server
 	const deal = unwrapPayload(
 		await zelliaApiRequest.call(this, 'POST', `${itemsPath}/${dealId}/register_sale`, { value }),
 	);
-	return { ...deal, result: 'won' };
+	return { ...deal, result: before.status === 'won' ? 'already_won' : 'won' };
 }
 
 /** Reads the contact's deals, waiting up to waitSeconds for one to appear. */

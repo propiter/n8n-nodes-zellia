@@ -199,10 +199,26 @@ describe('register sale', () => {
 	test('uses the register_sale endpoint with the amount', async () => {
 		const { items, calls } = await execute(
 			{ resource: 'deal', operation: 'registerSale', pipelineId: '2', dealLookup: 'dealId', dealId: 7, value: 850000 },
-			{ 'POST /pipelines/2/items/7/register_sale': { payload: { id: 7, status: 'won', value: '850000.0' } } },
+			{
+				'GET /pipelines/2/items/7': { payload: { id: 7, status: 'open', value: '0.0' } },
+				'POST /pipelines/2/items/7/register_sale': { payload: { id: 7, status: 'won', value: '850000.0' } },
+			},
 		);
-		assert.deepEqual(calls[0].body, { value: 850000 });
+		assert.deepEqual(calls.at(-1).body, { value: 850000 });
 		assert.equal(items[0].result, 'won');
+	});
+
+	test('repeating a sale with the same amount says already_won', async () => {
+		const { items, calls } = await execute(
+			{ resource: 'deal', operation: 'registerSale', pipelineId: '2', dealLookup: 'dealId', dealId: 7, value: 850000 },
+			{
+				'GET /pipelines/2/items/7': { payload: { id: 7, status: 'won', value: '850000.0' } },
+				'POST /pipelines/2/items/7/register_sale': { payload: { id: 7, status: 'won', value: '850000.0' } },
+			},
+		);
+		// Zellia still decides: the POST is sent and it keeps its own amount check
+		assert.equal(calls.at(-1).path, '/pipelines/2/items/7/register_sale');
+		assert.equal(items[0].result, 'already_won');
 	});
 
 	test('a different amount on a won deal is explained', async () => {
@@ -210,6 +226,7 @@ describe('register sale', () => {
 			execute(
 				{ resource: 'deal', operation: 'registerSale', pipelineId: '2', dealLookup: 'dealId', dealId: 7, value: 1 },
 				{
+					'GET /pipelines/2/items/7': { payload: { id: 7, status: 'won', value: '9.0' } },
 					'POST /pipelines/2/items/7/register_sale': () => {
 						throw new HttpError(422, { message: 'This deal is already won with a different amount', attributes: [] });
 					},
@@ -410,11 +427,12 @@ describe('review fixes', () => {
 			{
 				'GET /conversations/40': { id: 40, meta: { sender: { id: 5 } } },
 				'GET /contacts/5/pipeline_items': (call) => ({ payload: call.qs && call.qs.conversation_id ? [{ id: 7, pipeline_id: 2, status: 'won' }] : [] }),
+				'GET /pipelines/2/items/7': { payload: { id: 7, status: 'won', value: '900.0' } },
 				'POST /pipelines/2/items/7/register_sale': { payload: { id: 7, status: 'won', value: '900.0' } },
 			},
 		);
 		assert.equal(calls.at(-1).path, '/pipelines/2/items/7/register_sale');
-		assert.equal(items[0].result, 'won');
+		assert.equal(items[0].result, 'already_won');
 	});
 
 	test('waiting without a status filter waits for an open deal, not an old one', async () => {

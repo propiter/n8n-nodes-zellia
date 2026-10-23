@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Deal → Register Sale: `result` is `already_won` when the deal was already won, for example when the same sale is registered again. Before, it was always `won`. The node reads the deal first (one extra request), and Zellia still checks the amount.
+
 ## 0.3.0
 
 New:
