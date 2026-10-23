@@ -100,16 +100,26 @@ const defaultFetcher: Fetcher = async (url, timeoutMs) =>
 		const request = client.get(
 			url,
 			{ lookup: safeLookup, headers: { 'user-agent': 'n8n-nodes-zellia', accept: '*/*' } },
-			(response) =>
+			(response) => {
+				// From here the body read has its own deadline (readLimited)
+				clearTimeout(timer);
 				resolve({
 					statusCode: response.statusCode ?? 0,
 					headers: response.headers,
 					body: response,
-				}),
+				});
+			},
 		);
-		request.setTimeout(timeoutMs, () => request.destroy(new Error('timeout')));
-		request.on('error', reject);
+		// A hard limit, not an idle timeout: a server that sends its headers slowly cannot keep the request open
+		const timer = setTimeout(() => request.destroy(new Error('timeout')), timeoutMs);
+		request.on('error', (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
 	});
+
+/** The real transport, exported for tests. */
+export const httpFetch = defaultFetcher;
 
 let fetchUrl: Fetcher = defaultFetcher;
 

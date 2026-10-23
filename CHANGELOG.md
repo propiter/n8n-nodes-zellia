@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Message → Send Attachment (URL): the node checks the DNS addresses when it connects and connects only to a checked address, on every redirect hop. A name can no longer switch to a private IP after the check (DNS rebinding).
+- The whole download has a hard 30-second limit. A server that sends its headers or its body slowly cannot keep the request open longer.
+
 ## 0.2.0
 
 - Zellia Captain Tool Trigger: new trigger for Captain custom tools. It reads the conversation, contact and channel from the `X-Chatwoot-*` headers, checks the tool authentication (Bearer, API key header or Basic) and can accept only one account.

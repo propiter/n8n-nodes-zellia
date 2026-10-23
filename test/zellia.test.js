@@ -304,6 +304,23 @@ describe('attachments', () => {
 		}
 	});
 
+	test('a server that never sends its headers is cut off at the deadline', async () => {
+		const { httpFetch } = require('../dist/nodes/Zellia/actions/download.js');
+		const http = require('node:http');
+		const server = http.createServer(() => {
+			// Accept the request and never answer
+		});
+		await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const started = Date.now();
+		try {
+			await assert.rejects(httpFetch(new URL(`http://127.0.0.1:${server.address().port}/slow`), 200), /timeout/);
+			assert.ok(Date.now() - started < 2000);
+		} finally {
+			server.closeAllConnections();
+			server.close();
+		}
+	});
+
 	test('a binary field still works as before', async () => {
 		const { calls } = await execute({ ...base, binaryPropertyName: 'data' }, route, {
 			binary: { meta: { fileName: 'f.pdf', mimeType: 'application/pdf' }, data: Buffer.from('PDF') },
