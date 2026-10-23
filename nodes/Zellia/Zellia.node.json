@@ -1,0 +1,10 @@
+{
+	"node": "n8n-nodes-zellia.zellia",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["Communication", "Sales"],
+	"resources": {
+		"credentialDocumentation": [{ "url": "https://www.npmjs.com/package/n8n-nodes-zellia" }],
+		"primaryDocumentation": [{ "url": "https://www.npmjs.com/package/n8n-nodes-zellia" }]
+	}
+}

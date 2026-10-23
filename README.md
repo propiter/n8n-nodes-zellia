@@ -1,0 +1,131 @@
+# n8n-nodes-zellia
+
+n8n community nodes for [Zellia](https://zellia.io). Use them to send messages, manage conversations, contacts and deals, and start workflows from Zellia events. You set parameters in the node. You do not write HTTP requests or JSON bodies.
+
+The package has two nodes:
+
+- **Zellia**: actions on messages, conversations, contacts, deals and pipelines. It can also be used as a tool by the n8n AI Agent.
+- **Zellia Trigger**: starts a workflow when something happens in Zellia.
+
+[Installation](#installation) · [Credentials](#credentials) · [Operations](#operations) · [Trigger](#zellia-trigger) · [Notes](#notes) · [Development](#development)
+
+## Installation
+
+1. In n8n, open **Settings → Community Nodes**.
+2. Select **Install** and enter `n8n-nodes-zellia`.
+3. Accept the risk notice and select **Install**.
+
+For queue mode or Docker without the UI, follow the [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/).
+
+## Credentials
+
+Create a **Zellia API** credential:
+
+| Field | Value |
+|---|---|
+| Base URL | `https://app.zellia.io`, or your own instance |
+| Account ID | The number after `/app/accounts/` in the Zellia URL |
+| Access Token | An agent token (**Profile settings → Access token**), or an agent bot token (**Settings → Bots**) |
+
+n8n tests the credential with the inbox list. That endpoint accepts both token types.
+
+### Agent token or bot token?
+
+Zellia allows a bot token only on some endpoints. Messages, actions sent by the bot and deal moves show the bot name in Zellia, so a bot token is the right choice for bots. Use an agent token for the operations in this table:
+
+| Needs an agent token | Works with a bot token |
+|---|---|
+| Contact: all operations | Message: Send, Send Attachment |
+| Conversation: Get Many, Get Messages, Start Outbound | Conversation: Get, Create, Set Status, Assign, Labels, Custom Attributes, Priority |
+| Deal: Create, Link Conversation | Deal: Get, Get Many, Find for Contact or Conversation, Move to Stage, Mark as Won, Mark as Lost, Get History, Get Conversations |
+| Deal: Delete (administrator) | Deal: Update (amount and currency only) |
+| Lists of labels, agents and teams in the dropdowns | Pipeline: all operations, and the inbox, pipeline and stage dropdowns |
+| Zellia Trigger with **Account Webhook** (administrator) | |
+
+If a token is not allowed, the node stops with the message *This operation needs an agent token*.
+
+## Operations
+
+### Message
+
+- **Send**: text, private note, buttons, cards, or an approved WhatsApp template with numbered or named variables. Options: quote a message, or send as a specific agent bot.
+- **Send Attachment**: send a file from a binary field, with an optional caption.
+
+### Conversation
+
+- **Get**, **Get Many** (filters: status, assignee, inbox, team, labels, text), **Get Messages**
+- **Create** for an existing contact
+- **Start Outbound**: finds the contact by phone number, or creates it. Then it reuses an open conversation in the inbox, or creates one, and sends the first message (text or template). One node replaces the search → create → open → send chain.
+- **Set Status** (open, pending, resolved, snoozed), **Set Priority**
+- **Assign** to an agent, an agent bot or a team, or remove the agent or team
+- **Add Labels** and **Remove Labels** keep the other labels. Zellia replaces the full list on every save, so the node reads the list first. **Replace Labels** sets the exact list.
+- **Set Custom Attributes**: merges by default. Turn on **Replace All Attributes** to delete the attributes you do not list.
+
+### Contact
+
+- **Create or Update**: finds the contact by phone, email or identifier, with an exact match, then updates or creates it. The output field `upsertResult` is `found`, `updated` or `created`.
+- **Create**, **Get**, **Update**, **Search**, **Get Conversations**
+
+Phone numbers are normalized to E.164: `+57 300-123 4567` becomes `+573001234567`.
+
+### Deal
+
+- **Find for Contact or Conversation**: finds deals from a conversation ID or a contact ID. Optional filters: pipeline, status, and only deals linked to the conversation.
+- **Mark as Won**: sets the amount, if given, then moves the deal to the won stage of its pipeline. Zellia requires an amount above 0. If you leave the amount at 0, the node keeps the current amount. If the deal is already won, nothing changes and the output has `alreadyInStage: true`.
+- **Mark as Lost**: moves the deal to the lost stage of its pipeline.
+- **Move to Stage**: pick the stage from the list.
+- **Create**: Zellia allows one open deal for each contact in each pipeline. By default, the node returns the open deal (`alreadyExisted: true`) and does not fail. It can also link a conversation.
+- **Get**, **Get Many**, **Update**, **Delete**, **Get History**, **Get Conversations**, **Link Conversation**
+
+### Pipeline
+
+- **Get Many**, **Get** (with stages), **Get Stages**
+
+## Zellia Trigger
+
+### Source: Account Webhook
+
+When you publish the workflow, n8n registers a webhook in Zellia. When you unpublish it, n8n deletes the webhook. This needs an administrator token.
+
+- **Events**: message created or updated, conversation created, updated or status changed, contact created or updated, and more.
+- **Inbox**: optional. The node drops the events of other channels. Zellia sends every event of the account, so the node does this filtering itself. Contact events have no channel, so they always pass.
+- **Signature check**: every delivery must have a valid `X-Chatwoot-Signature`. The secret comes from the registration. Requests with a missing or wrong signature, or older than 5 minutes, get a 401 and do not start the workflow. If the node has no stored secret, it rejects every request. Publish the workflow again to register a new webhook.
+
+### Source: Automation Rule
+
+Use this source for deal stage changes. Zellia does not offer deal events as account webhooks.
+
+1. In Zellia, create an automation rule, for example on *Deal stage changed* with the stage condition you need.
+2. Add the action **Send webhook event**.
+3. Paste the production URL of the node into the action.
+
+Automation rules do not sign their requests. To block requests from other sources, set a **Secret Token** in the node and add `?token=YOUR_TOKEN` to the URL in the rule.
+
+### Filters and output
+
+- **Message Filters**: by default, only incoming messages from the contact start the workflow. Private notes and messages from agent bots and Captain are skipped, so a bot cannot answer itself.
+- **Required Labels**: only conversations that have at least one of the labels you list.
+- **Simplify** (on by default): the output is a flat object. For messages it has `text`, `conversation_id`, `contact_phone`, `labels`, `sender_type` and other fields. For deal events it has `deal_id`, `value` as a number, `stage_type`, `from_stage_name` and other fields. Turn Simplify off to get the raw Zellia payload.
+
+## Notes
+
+- **Conversation ID** is the number in the Zellia URL. It is not an internal database ID.
+- Labels are lowercase in Zellia. The node converts the labels you enter to lowercase, and it compares labels without regard to case.
+- Operations that return lists send one item for each result. If no deal matches, the node returns no items. To continue with an empty result, turn on **Always Output Data** in the node settings.
+- Deal amounts come from Zellia as strings, such as `"850000.0"`. The trigger converts `value` to a number.
+
+## Development
+
+```bash
+npm install
+npm run build      # compile to dist/
+npm run lint       # n8n community node rules
+npm test           # build, then run the unit tests (node:test)
+npm run dev        # start a local n8n with the nodes linked
+```
+
+To publish a new version, update `CHANGELOG.md`, bump the version, then run `npm run release`.
+
+## License
+
+[MIT](LICENSE)
