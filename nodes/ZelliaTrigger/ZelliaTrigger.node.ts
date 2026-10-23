@@ -70,10 +70,23 @@ export class ZelliaTrigger implements INodeType {
 				name: 'default',
 				httpMethod: 'POST',
 				responseMode: 'onReceived',
-				path: 'webhook',
+				// Zellia ignores the answer; without this n8n sends the literal text "firstEntryJson"
+				responseData: 'noData',
+				// An empty path falls back to the node's webhook ID
+				path: '={{$parameter["path"]}}',
+				isFullPath: true,
 			},
 		],
 		properties: [
+			{
+				displayName: 'Path',
+				name: 'path',
+				type: 'string',
+				default: '',
+				placeholder: 'new-lead',
+				description:
+					'Optional. The last part of the URL, such as new-lead. Must be unique on this n8n. Leave empty to use an automatic ID.',
+			},
 			{
 				displayName: 'Source',
 				name: 'source',

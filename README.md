@@ -90,6 +90,8 @@ Phone numbers are normalized to E.164: `+57 300-123 4567` becomes `+573001234567
 
 ## Zellia Trigger
 
+Set an optional **Path**, such as `new-lead`, to get a readable URL (`/webhook/new-lead`). Leave it empty to use an automatic ID.
+
 ### Source: Account Webhook
 
 When you publish the workflow, n8n registers a webhook in Zellia. When you unpublish it, n8n deletes the webhook. This needs an administrator token.

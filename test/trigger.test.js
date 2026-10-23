@@ -269,3 +269,13 @@ describe('webhook lifecycle', () => {
 		assert.deepEqual(context.staticData, {});
 	});
 });
+
+describe('webhook definition', () => {
+	test('the path comes from the node and the answer is empty', () => {
+		const [webhook] = new ZelliaTrigger().description.webhooks;
+		assert.equal(webhook.path, '={{$parameter["path"]}}');
+		assert.equal(webhook.isFullPath, true);
+		assert.equal(webhook.responseData, 'noData');
+		assert.ok(new ZelliaTrigger().description.properties.some((p) => p.name === 'path'));
+	});
+});
