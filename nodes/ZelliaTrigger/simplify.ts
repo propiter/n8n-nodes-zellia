@@ -122,10 +122,19 @@ export function simplifyEvent(body: IDataObject): IDataObject {
 
 	if (event.startsWith('conversation_') || event.startsWith('automation_event.')) {
 		const conversation = event.startsWith('conversation_typing') ? obj(body.conversation) : body;
+		// Zellia sends the last chat message of the conversation; keep it so nothing is lost
+		const messages = Array.isArray(conversation.messages)
+			? (conversation.messages as IDataObject[])
+			: [];
+		const last = obj(messages[messages.length - 1]);
 		return {
 			event,
 			account_id: num(account.id ?? obj(conversation.account).id),
 			...conversationFields(conversation),
+			last_message_id: num(last.id),
+			text: last.content ?? null,
+			last_message_type: last.message_type ?? null,
+			last_message_private: last.private === true,
 			...(body.changed_attributes ? { changed_attributes: body.changed_attributes } : {}),
 		};
 	}

@@ -270,6 +270,105 @@ export function messageContentFields(show: Show): INodeProperties[] {
 			],
 		},
 		{
+			displayName: 'Header',
+			name: 'templateHeader',
+			type: 'collection',
+			placeholder: 'Add Header',
+			default: {},
+			displayOptions: withShow(show, { messageKind: ['template'] }),
+			description: 'Only for templates whose header has a variable or a file',
+			options: [
+				{
+					displayName: 'File Name',
+					name: 'mediaName',
+					type: 'string',
+					default: '',
+					description: 'Name shown for a document header',
+				},
+				{
+					displayName: 'File Type',
+					name: 'mediaType',
+					type: 'options',
+					options: [
+						{ name: 'Document', value: 'document' },
+						{ name: 'Image', value: 'image' },
+						{ name: 'Video', value: 'video' },
+					],
+					default: 'image',
+				},
+				{
+					displayName: 'File URL',
+					name: 'mediaUrl',
+					type: 'string',
+					default: '',
+					placeholder: 'https://example.com/catalog.pdf',
+					description: 'Public link to the image, video or document of a media header',
+				},
+				{
+					displayName: 'Text Variables',
+					name: 'textVariables',
+					type: 'string',
+					default: '',
+					description:
+						'Values for the text header, in order, separated by || (for example Pedido 45||Ana)',
+				},
+				{
+					displayName: 'Type',
+					name: 'type',
+					type: 'options',
+					options: [
+						{ name: 'File', value: 'media' },
+						{ name: 'Text', value: 'text' },
+					],
+					default: 'text',
+				},
+			],
+		},
+		{
+			displayName: 'Buttons',
+			name: 'templateButtons',
+			type: 'fixedCollection',
+			placeholder: 'Add Button Value',
+			typeOptions: { multipleValues: true },
+			default: {},
+			displayOptions: withShow(show, { messageKind: ['template'] }),
+			description:
+				'Values for template buttons that have a variable, such as a URL suffix or a coupon',
+			options: [
+				{
+					displayName: 'Button',
+					name: 'values',
+					values: [
+						{
+							displayName: 'Button Position',
+							name: 'index',
+							type: 'number',
+							typeOptions: { minValue: 0 },
+							default: 0,
+							description: 'Position of the button in the template, starting at 0',
+						},
+						{
+							displayName: 'Type',
+							name: 'type',
+							type: 'options',
+							options: [
+								{ name: 'Coupon Code', value: 'copy_code' },
+								{ name: 'URL', value: 'url' },
+							],
+							default: 'url',
+						},
+						{
+							displayName: 'Value',
+							name: 'parameter',
+							type: 'string',
+							default: '',
+							description: 'The variable part of the URL, or the coupon code (up to 15 characters)',
+						},
+					],
+				},
+			],
+		},
+		{
 			displayName: 'Text Shown in Zellia',
 			name: 'templateContent',
 			type: 'string',

@@ -77,6 +77,13 @@ export const dealOperations: INodeProperties[] = [
 				action: 'Move a deal to a stage',
 			},
 			{
+				name: 'Register Sale',
+				value: 'registerSale',
+				description:
+					"Zellia's own sale registration: sets the amount and wins the deal in one locked step. Needs an agent token.",
+				action: 'Register a sale',
+			},
+			{
 				name: 'Update',
 				value: 'update',
 				description: 'Bot tokens can only change the amount and currency',
@@ -98,11 +105,13 @@ const withPipeline = [
 	'markLost',
 	'markWon',
 	'moveToStage',
+	'registerSale',
 	'update',
 ];
 
+const closing = ['markWon', 'markLost', 'registerSale'];
 const withDeal = withPipeline.filter(
-	(operation) => !['create', 'getAll', 'markWon', 'markLost'].includes(operation),
+	(operation) => !['create', 'getAll', ...closing].includes(operation),
 );
 
 export const dealFields: INodeProperties[] = [
@@ -140,7 +149,7 @@ export const dealFields: INodeProperties[] = [
 			},
 		],
 		default: 'dealId',
-		displayOptions: { show: { resource: R, operation: ['markWon', 'markLost'] } },
+		displayOptions: { show: { resource: R, operation: closing } },
 	},
 	{
 		displayName: 'Deal ID',
@@ -149,7 +158,7 @@ export const dealFields: INodeProperties[] = [
 		required: true,
 		default: 0,
 		displayOptions: {
-			show: { resource: R, operation: ['markWon', 'markLost'], dealLookup: ['dealId'] },
+			show: { resource: R, operation: closing, dealLookup: ['dealId'] },
 		},
 	},
 	{
@@ -159,9 +168,21 @@ export const dealFields: INodeProperties[] = [
 		required: true,
 		default: 0,
 		displayOptions: {
-			show: { resource: R, operation: ['markWon', 'markLost'], dealLookup: ['conversation'] },
+			show: { resource: R, operation: closing, dealLookup: ['conversation'] },
 		},
 		description: 'Number of the conversation, as shown in the Zellia URL',
+	},
+	{
+		displayName: 'Wait for the Deal (Seconds)',
+		name: 'waitSeconds',
+		type: 'number',
+		typeOptions: { minValue: 0, maxValue: 30 },
+		default: 0,
+		displayOptions: {
+			show: { resource: R, operation: closing, dealLookup: ['conversation'] },
+		},
+		description:
+			'Zellia opens the deal of a new conversation a moment after it is created. Set a few seconds to wait for it. 0 does not wait.',
 	},
 
 	// Move
@@ -176,6 +197,33 @@ export const dealFields: INodeProperties[] = [
 		description:
 			'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 	},
+	{
+		displayName: 'Only Move Forward',
+		name: 'onlyForward',
+		type: 'boolean',
+		default: false,
+		displayOptions: { show: { resource: R, operation: ['moveToStage'] } },
+		description:
+			'Whether to leave the deal where it is when the stage is earlier on the board. The result field then says skipped_backward.',
+	},
+	{
+		displayName: 'Lost Reason',
+		name: 'lostReason',
+		type: 'string',
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['markLost'] } },
+		description: 'Optional. Saved in the custom attribute below. Needs an agent token.',
+	},
+	{
+		displayName: 'Reason Attribute Key Name or ID',
+		name: 'lostReasonKey',
+		type: 'options',
+		typeOptions: { loadOptionsMethod: 'getDealAttributeKeys' },
+		default: '',
+		displayOptions: { show: { resource: R, operation: ['markLost'] } },
+		description:
+			'Deal attribute that stores the reason. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+	},
 
 	// Won
 	{
@@ -184,7 +232,7 @@ export const dealFields: INodeProperties[] = [
 		type: 'number',
 		typeOptions: { minValue: 0 },
 		default: 0,
-		displayOptions: { show: { resource: R, operation: ['markWon'] } },
+		displayOptions: { show: { resource: R, operation: ['markWon', 'registerSale'] } },
 		description:
 			'Sale amount. Leave 0 to keep the amount the deal already has; a won deal needs an amount above 0.',
 	},
@@ -324,6 +372,14 @@ export const dealFields: INodeProperties[] = [
 				placeholder: 'COP',
 			},
 			customAttributesField('customAttributes', 'getDealAttributeKeys'),
+			{
+				displayName: 'Replace All Attributes',
+				name: 'replaceAttributes',
+				type: 'boolean',
+				default: false,
+				description:
+					'Whether to delete the attributes not listed here. When off, the listed attributes are merged with the current ones.',
+			},
 		],
 	},
 
@@ -398,6 +454,15 @@ export const dealFields: INodeProperties[] = [
 					{ name: 'Won', value: 'won' },
 				],
 				default: 'open',
+			},
+			{
+				displayName: 'Wait for a Deal (Seconds)',
+				name: 'waitSeconds',
+				type: 'number',
+				typeOptions: { minValue: 0, maxValue: 30 },
+				default: 0,
+				description:
+					'Wait up to this many seconds for a matching deal, for example while Zellia opens the deal of a new conversation',
 			},
 		],
 	},

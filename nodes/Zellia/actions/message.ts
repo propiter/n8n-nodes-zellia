@@ -10,6 +10,37 @@ function collectionValues(ctx: IExecuteFunctions, name: string, i: number): IDat
 	return asArray(collection.values);
 }
 
+/** Header parameters: numbered text variables, or a media file. */
+function templateHeader(header: IDataObject): IDataObject | undefined {
+	if (header.type === 'media') {
+		const url = String(header.mediaUrl ?? '').trim();
+		if (!url) return undefined;
+		const media: IDataObject = { media_url: url, media_type: String(header.mediaType ?? 'image') };
+		const name = String(header.mediaName ?? '').trim();
+		if (name) media.media_name = name;
+		return media;
+	}
+	const values = String(header.textVariables ?? '')
+		.split('||')
+		.map((value) => value.trim())
+		.filter((value) => value !== '');
+	if (!values.length) return undefined;
+	return Object.fromEntries(values.map((value, index) => [String(index + 1), value]));
+}
+
+/** Zellia reads the button index from the array position, so empty slots fill the gaps. */
+function templateButtons(rows: IDataObject[]): IDataObject[] {
+	const buttons: IDataObject[] = [];
+	for (const row of rows) {
+		const parameter = String(row.parameter ?? '').trim();
+		const index = Math.max(0, Math.floor(Number(row.index ?? 0)));
+		if (!parameter) continue;
+		while (buttons.length < index) buttons.push({});
+		buttons[index] = { type: String(row.type ?? 'url'), parameter };
+	}
+	return buttons;
+}
+
 /** Builds the body of POST /messages from the shared message fields. */
 export function buildMessageBody(this: IExecuteFunctions, i: number): IDataObject {
 	const kind = this.getNodeParameter('messageKind', i) as string;
@@ -98,6 +129,10 @@ export function buildMessageBody(this: IExecuteFunctions, i: number): IDataObjec
 			const processedParams: IDataObject = Object.keys(bodyParams).length
 				? { body: bodyParams }
 				: {};
+			const header = templateHeader(this.getNodeParameter('templateHeader', i, {}) as IDataObject);
+			if (header) processedParams.header = header;
+			const buttons = templateButtons(collectionValues(this, 'templateButtons', i));
+			if (buttons.length) processedParams.buttons = buttons;
 			body.template_params = {
 				name,
 				category: this.getNodeParameter('templateCategory', i),

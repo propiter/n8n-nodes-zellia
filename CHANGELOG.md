@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0
+
+New:
+- Deal → **Register Sale**: Zellia's sale registration in one locked step (agent token).
+- Deal → Move to Stage: **Only Move Forward** option and a `result` field (`moved`, `already_in_stage`, `skipped_backward`).
+- Deal → Mark as Lost: optional reason saved in a deal attribute.
+- Deal → Mark as Won: `amountDiffers` when the deal was already won with another amount.
+- Deal: **Wait for the Deal** in the conversation lookup and in Find for Contact, for deals that Zellia opens a moment after a new conversation.
+- Message → Send (WhatsApp template): header (text variables or media) and button values (URL suffix or coupon code).
+- Credential: optional **Default Country Code** for phone numbers written without a country code.
+- **Zellia Webhook Secret API** credential: the trigger tokens can be stored encrypted.
+- Captain Tool Trigger: **Respond Immediately, With a Fixed Answer** for long jobs.
+- Zellia Trigger: conversation events keep the last message (`text`, `last_message_id`) when Simplify is on.
+- Clearer errors for rate limits (429) and unavailable server (5xx).
+
+Changed (check the migration notes):
+- Deal → Update **merges** custom attributes with the current ones. Before, it replaced them all, like the Zellia API. To keep the old behaviour, turn on **Replace All Attributes**.
+- Deal → Update stops with an error when Zellia ignores attributes or the agent (bot tokens). Before, it reported success.
+- Deal → Create returns the open deal that Zellia opened in the meantime instead of failing with "already has an open deal".
+- Deal → Move to Stage reads the deal first (one extra request) to report the result, and does not call Zellia when the deal is already in that stage.
+- Zellia Trigger (Account Webhook): when the events or the inbox change, the node updates the existing Zellia webhook instead of deleting and creating it. The webhook ID and its secret stay the same.
+
+Migration notes:
+- Review every Deal → Update node that sets custom attributes. If the flow relied on deleting the attributes it did not send, turn on **Replace All Attributes**.
+- Flows that used a bot token in Deal → Update for custom attributes now fail with a clear error. Use an agent token for that node.
+- After the update, restart the n8n workers and webhook processors (see the README).
+
 ## 0.2.2
 
 - Zellia Trigger: new optional **Path** field, so the URL can be readable, such as `/webhook/new-lead`. When it is empty, n8n uses the node's automatic ID, so the URL of an existing trigger without a path changes from `/webhook/<id>/webhook` to `/webhook/<id>`. Update the URL in Zellia after you install this version.

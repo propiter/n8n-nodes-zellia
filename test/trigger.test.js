@@ -225,18 +225,19 @@ describe('webhook lifecycle', () => {
 		assert.deepEqual(context.staticData, { webhookId: 12, webhookSecret: 'abc' });
 	});
 
-	test('checkExists re-registers when the events changed', async () => {
+	test('checkExists updates the webhook when the events changed', async () => {
 		const context = createContext({
 			params,
 			routes: {
 				'GET /webhooks': {
-					payload: { webhooks: [{ id: 12, url: 'https://n8n.test/webhook/abc/webhook', subscriptions: ['message_updated'] }] },
+					payload: { webhooks: [{ id: 12, url: 'https://n8n.test/webhook/abc/webhook', subscriptions: ['message_updated'], secret: 'abc' }] },
 				},
-				'DELETE /webhooks/12': '',
+				'PATCH /webhooks/12': { payload: { webhook: { id: 12, secret: 'abc', subscriptions: ['message_created'] } } },
 			},
 		});
-		assert.equal(await new ZelliaTrigger().webhookMethods.default.checkExists.call(context), false);
-		assert.equal(context.calls.at(-1).method, 'DELETE');
+		assert.equal(await new ZelliaTrigger().webhookMethods.default.checkExists.call(context), true);
+		assert.equal(context.calls.at(-1).method, 'PATCH');
+		assert.equal(context.staticData.webhookSecret, 'abc');
 	});
 
 	test('checkExists keeps a matching webhook', async () => {

@@ -64,6 +64,11 @@ export class ZelliaTrigger implements INodeType {
 				required: true,
 				displayOptions: { show: { source: ['webhook'] } },
 			},
+			{
+				name: 'zelliaWebhookSecretApi',
+				required: true,
+				displayOptions: { show: { source: ['automation'], secretSource: ['credential'] } },
+			},
 		],
 		webhooks: [
 			{
@@ -149,13 +154,33 @@ export class ZelliaTrigger implements INodeType {
 					'Only events of this channel. Contact events have no channel and always pass. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 			},
 			{
+				displayName: 'Store the Token In',
+				name: 'secretSource',
+				type: 'options',
+				noDataExpression: true,
+				options: [
+					{
+						name: 'Credential (Recommended)',
+						value: 'credential',
+						description: 'Encrypted, and kept when you edit the node',
+					},
+					{
+						name: 'Node Parameter',
+						value: 'parameter',
+						description: 'Stored in the workflow without encryption',
+					},
+				],
+				default: 'parameter',
+				displayOptions: { show: { source: ['automation'] } },
+			},
+			{
 				displayName: 'Secret Token',
 				name: 'automationToken',
 				type: 'string',
 				typeOptions: { password: true },
 				required: true,
 				default: '',
-				displayOptions: { show: { source: ['automation'] } },
+				displayOptions: { show: { source: ['automation'], secretSource: ['parameter'] } },
 				description:
 					'Long random value. Add ?token= and this value to the URL in the Zellia rule. Automation rules do not sign their requests, so requests without the right token are rejected.',
 			},
@@ -259,15 +284,18 @@ export class ZelliaTrigger implements INodeType {
 					JSON.stringify([...asArray(existing.subscriptions)].map(String).sort()) ===
 					JSON.stringify(events);
 				const existingInbox = Number((existing.inbox as IDataObject | undefined)?.id ?? 0);
+				let current = existing;
 				if (!sameEvents || existingInbox !== inboxId) {
-					// Settings changed since registration: drop it so create() registers it again
-					await zelliaApiRequest.call(this, 'DELETE', `/webhooks/${existing.id}`);
-					delete staticData.webhookId;
-					delete staticData.webhookSecret;
-					return false;
+					// Settings changed: update in place, which keeps the webhook ID and its secret
+					const updated = findWebhook(
+						await zelliaApiRequest.call(this, 'PATCH', `/webhooks/${existing.id}`, {
+							webhook: { subscriptions: events, inbox_id: inboxId > 0 ? inboxId : null },
+						}),
+					);
+					current = { ...existing, ...(updated ?? {}) };
 				}
-				staticData.webhookId = Number(existing.id);
-				if (existing.secret) staticData.webhookSecret = String(existing.secret);
+				staticData.webhookId = Number(current.id);
+				if (current.secret) staticData.webhookSecret = String(current.secret);
 				return true;
 			},
 
@@ -317,7 +345,10 @@ export class ZelliaTrigger implements INodeType {
 		};
 
 		if (source === 'automation') {
-			const token = this.getNodeParameter('automationToken', '') as string;
+			const token =
+				this.getNodeParameter('secretSource', 'parameter') === 'credential'
+					? String((await this.getCredentials('zelliaWebhookSecretApi')).secret ?? '')
+					: (this.getNodeParameter('automationToken', '') as string);
 			const received = String((this.getQueryData() as IDataObject).token ?? '');
 			// Fail closed: an empty token must not open the URL to anyone
 			if (!token || !safeEqual(received, token)) return reject(401, 'Invalid token');

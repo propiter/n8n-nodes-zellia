@@ -4,6 +4,7 @@ import { NodeOperationError } from 'n8n-workflow';
 import {
 	asArray,
 	findContact,
+	getZelliaCredentials,
 	keyValuesToObject,
 	normalizePhone,
 	unwrapPayload,
@@ -11,11 +12,11 @@ import {
 	zelliaApiRequestAllItems,
 } from '../GenericFunctions';
 
-function buildContactBody(data: IDataObject): IDataObject {
+function buildContactBody(data: IDataObject, countryCode = ''): IDataObject {
 	const body: IDataObject = {};
 	if (data.name) body.name = String(data.name).trim();
 	if (data.email) body.email = String(data.email).trim().toLowerCase();
-	if (data.phone) body.phone_number = normalizePhone(String(data.phone));
+	if (data.phone) body.phone_number = normalizePhone(String(data.phone), countryCode);
 	if (data.identifier) body.identifier = String(data.identifier).trim();
 	if (data.blocked !== undefined) body.blocked = data.blocked;
 	const attributes = keyValuesToObject(data.customAttributes);
@@ -37,11 +38,12 @@ async function createContact(
 }
 
 async function upsertContact(this: IExecuteFunctions, i: number): Promise<IDataObject> {
+	const { defaultCountryCode: countryCode } = await getZelliaCredentials.call(this);
 	const matchBy = this.getNodeParameter('matchBy', i) as 'phone' | 'email' | 'identifier';
 	const rawValue = String(this.getNodeParameter('matchValue', i) ?? '').trim();
 	const value =
 		matchBy === 'phone'
-			? normalizePhone(rawValue)
+			? normalizePhone(rawValue, countryCode)
 			: matchBy === 'email'
 				? rawValue.toLowerCase()
 				: rawValue;
@@ -49,7 +51,10 @@ async function upsertContact(this: IExecuteFunctions, i: number): Promise<IDataO
 		throw new NodeOperationError(this.getNode(), 'The value to match is empty', { itemIndex: i });
 	}
 	const field = { phone: 'phone_number', email: 'email', identifier: 'identifier' }[matchBy];
-	const body = buildContactBody(this.getNodeParameter('contactData', i, {}) as IDataObject);
+	const body = buildContactBody(
+		this.getNodeParameter('contactData', i, {}) as IDataObject,
+		countryCode,
+	);
 
 	// Search is a fuzzy ILIKE, so keep only the exact match
 	const existing = await findContact.call(this, value, (candidate) => {
@@ -76,11 +81,12 @@ export async function executeContact(
 	operation: string,
 	i: number,
 ): Promise<IDataObject | IDataObject[]> {
+	const { defaultCountryCode: countryCode } = await getZelliaCredentials.call(this);
 	switch (operation) {
 		case 'create':
 			return await createContact.call(
 				this,
-				buildContactBody(this.getNodeParameter('contactData', i, {}) as IDataObject),
+				buildContactBody(this.getNodeParameter('contactData', i, {}) as IDataObject, countryCode),
 				this.getNodeParameter('inboxId', i, ''),
 			);
 
@@ -94,7 +100,10 @@ export async function executeContact(
 
 		case 'update': {
 			const contactId = this.getNodeParameter('contactId', i) as number;
-			const body = buildContactBody(this.getNodeParameter('contactData', i, {}) as IDataObject);
+			const body = buildContactBody(
+				this.getNodeParameter('contactData', i, {}) as IDataObject,
+				countryCode,
+			);
 			if (!Object.keys(body).length) {
 				throw new NodeOperationError(this.getNode(), 'Add at least one field to update', {
 					itemIndex: i,

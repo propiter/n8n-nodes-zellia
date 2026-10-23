@@ -1,5 +1,5 @@
-import type { IDataObject, IExecuteFunctions } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import type { IDataObject, IExecuteFunctions, JsonObject } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError, sleep } from 'n8n-workflow';
 
 import {
 	asArray,
@@ -9,20 +9,28 @@ import {
 	zelliaApiRequestAllItems,
 } from '../GenericFunctions';
 
+// Upper bound for the optional wait while Zellia opens a deal for a new conversation
+const MAX_WAIT_SECONDS = 30;
+
+async function getStages(this: IExecuteFunctions, pipelineId: number): Promise<IDataObject[]> {
+	return asArray(
+		(await zelliaApiRequest.call(this, 'GET', `/pipelines/${pipelineId}/stages`)).payload,
+	);
+}
+
 async function findStageByType(
 	this: IExecuteFunctions,
 	pipelineId: number,
 	stageType: 'won' | 'lost',
 	i: number,
 ): Promise<IDataObject> {
-	const response = await zelliaApiRequest.call(this, 'GET', `/pipelines/${pipelineId}/stages`);
-	const stage = asArray(response.payload).find((candidate) => candidate.stage_type === stageType);
+	const stage = (await getStages.call(this, pipelineId)).find(
+		(candidate) => candidate.stage_type === stageType,
+	);
 	if (!stage) {
-		throw new NodeOperationError(
-			this.getNode(),
-			`The pipeline has no ${stageType === 'won' ? 'won' : 'lost'} stage`,
-			{ itemIndex: i },
-		);
+		throw new NodeOperationError(this.getNode(), `The pipeline has no ${stageType} stage`, {
+			itemIndex: i,
+		});
 	}
 	return stage;
 }
@@ -43,6 +51,59 @@ async function getDeal(this: IExecuteFunctions, itemsPath: string, dealId: numbe
 	return unwrapPayload(await zelliaApiRequest.call(this, 'GET', `${itemsPath}/${dealId}`));
 }
 
+/**
+ * PATCHes a deal and checks that Zellia kept what was sent. Zellia answers 200 but drops
+ * custom attributes and the assignee when the token belongs to an agent bot.
+ */
+async function patchDeal(
+	this: IExecuteFunctions,
+	itemsPath: string,
+	dealId: number,
+	changes: IDataObject,
+	i: number,
+): Promise<IDataObject> {
+	const saved = unwrapPayload(
+		await zelliaApiRequest.call(this, 'PATCH', `${itemsPath}/${dealId}`, {
+			pipeline_item: changes,
+		}),
+	);
+	const sentAttributes = (changes.custom_attributes as IDataObject | undefined) ?? {};
+	const savedAttributes = (saved.custom_attributes as IDataObject | undefined) ?? {};
+	const attributesLost = Object.keys(sentAttributes).some(
+		(key) => String(savedAttributes[key] ?? '') !== String(sentAttributes[key] ?? ''),
+	);
+	if (attributesLost) {
+		throw new NodeOperationError(this.getNode(), 'Zellia did not save the custom attributes', {
+			itemIndex: i,
+			description:
+				'Agent bot tokens can only change the amount and currency of a deal. Use a credential with an agent token.',
+		});
+	}
+	const assignee = saved.assignee as IDataObject | undefined;
+	if (changes.assignee_id !== undefined && Number(assignee?.id) !== Number(changes.assignee_id)) {
+		throw new NodeOperationError(this.getNode(), 'Zellia did not change the agent of the deal', {
+			itemIndex: i,
+			description: 'Agent bot tokens cannot assign deals. Use a credential with an agent token.',
+		});
+	}
+	return saved;
+}
+
+/** Custom attributes to send: merged with the current ones unless replace is on. */
+async function attributesToSave(
+	this: IExecuteFunctions,
+	itemsPath: string,
+	dealId: number,
+	attributes: IDataObject,
+	replace: boolean,
+	current?: IDataObject,
+): Promise<IDataObject> {
+	if (replace) return attributes;
+	// Zellia replaces the whole hash on PATCH, so the node merges first
+	const deal = current ?? (await getDeal.call(this, itemsPath, dealId));
+	return { ...((deal.custom_attributes as IDataObject | undefined) ?? {}), ...attributes };
+}
+
 async function markWon(
 	this: IExecuteFunctions,
 	pipelineId: number,
@@ -51,14 +112,20 @@ async function markWon(
 	i: number,
 ): Promise<IDataObject> {
 	const deal = await getDeal.call(this, itemsPath, dealId);
-	if (deal.status === 'won') return { ...deal, alreadyInStage: true, result: 'already_won' };
+	const value = Number(this.getNodeParameter('value', i, 0));
+	const currentValue = Number(deal.value ?? 0);
+	if (deal.status === 'won') {
+		return {
+			...deal,
+			alreadyInStage: true,
+			result: 'already_won',
+			amountDiffers: value > 0 && value !== currentValue,
+		};
+	}
 
-	const value = this.getNodeParameter('value', i, 0) as number;
 	const currency = String(this.getNodeParameter('currency', i, '') ?? '')
 		.trim()
 		.toUpperCase();
-	const currentValue = Number(deal.value ?? 0);
-
 	const changes: IDataObject = {};
 	if (value > 0 && value !== currentValue) changes.value = value;
 	if (currency && currency !== deal.currency) changes.currency = currency;
@@ -69,16 +136,13 @@ async function markWon(
 		});
 	}
 	// Agent bots cannot call register_sale, so set the amount and move in two steps
-	if (Object.keys(changes).length) {
-		await zelliaApiRequest.call(this, 'PATCH', `${itemsPath}/${dealId}`, {
-			pipeline_item: changes,
-		});
-	}
+	if (Object.keys(changes).length) await patchDeal.call(this, itemsPath, dealId, changes, i);
 	const wonStage = await findStageByType.call(this, pipelineId, 'won', i);
 	return {
 		...(await moveDeal.call(this, itemsPath, dealId, Number(wonStage.id))),
 		alreadyInStage: false,
 		result: 'won',
+		amountDiffers: false,
 	};
 }
 
@@ -90,13 +154,94 @@ async function markLost(
 	i: number,
 ): Promise<IDataObject> {
 	const deal = await getDeal.call(this, itemsPath, dealId);
-	if (deal.status === 'lost') return { ...deal, alreadyInStage: true, result: 'already_lost' };
-	const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
-	return {
-		...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
-		alreadyInStage: false,
-		result: 'lost',
-	};
+	let result: IDataObject;
+	if (deal.status === 'lost') {
+		result = { ...deal, alreadyInStage: true, result: 'already_lost' };
+	} else {
+		const lostStage = await findStageByType.call(this, pipelineId, 'lost', i);
+		result = {
+			...(await moveDeal.call(this, itemsPath, dealId, Number(lostStage.id))),
+			alreadyInStage: false,
+			result: 'lost',
+		};
+	}
+
+	const reason = String(this.getNodeParameter('lostReason', i, '') ?? '').trim();
+	const reasonKey = String(this.getNodeParameter('lostReasonKey', i, '') ?? '').trim();
+	if (reason && reasonKey) {
+		const attributes = await attributesToSave.call(
+			this,
+			itemsPath,
+			dealId,
+			{ [reasonKey]: reason },
+			false,
+			deal,
+		);
+		const saved = await patchDeal.call(
+			this,
+			itemsPath,
+			dealId,
+			{ custom_attributes: attributes },
+			i,
+		);
+		result = { ...result, custom_attributes: saved.custom_attributes };
+	}
+	return result;
+}
+
+async function registerSale(
+	this: IExecuteFunctions,
+	itemsPath: string,
+	dealId: number,
+	i: number,
+): Promise<IDataObject> {
+	const value = Number(this.getNodeParameter('value', i, 0));
+	if (!(value > 0)) {
+		throw new NodeOperationError(this.getNode(), 'A sale needs an amount above 0', {
+			itemIndex: i,
+		});
+	}
+	// One locked step in Zellia: sets the amount and wins the deal. The same amount again is a no-op.
+	const deal = unwrapPayload(
+		await zelliaApiRequest.call(this, 'POST', `${itemsPath}/${dealId}/register_sale`, { value }),
+	);
+	return { ...deal, result: 'won' };
+}
+
+/** Reads the contact's deals, waiting up to waitSeconds for one to appear. */
+async function contactDeals(
+	this: IExecuteFunctions,
+	contactId: number,
+	qs: IDataObject,
+	accept: (deals: IDataObject[]) => boolean,
+	waitSeconds: number,
+): Promise<IDataObject[]> {
+	const deadline = Date.now() + Math.min(Math.max(waitSeconds, 0), MAX_WAIT_SECONDS) * 1000;
+	for (;;) {
+		const response = await zelliaApiRequest.call(
+			this,
+			'GET',
+			`/contacts/${contactId}/pipeline_items`,
+			undefined,
+			qs,
+		);
+		const deals = asArray(response.payload);
+		if (accept(deals) || Date.now() >= deadline) return deals;
+		// Zellia opens deals for new conversations asynchronously, usually within a second or two
+		await sleep(1000);
+	}
+}
+
+async function contactOfConversation(this: IExecuteFunctions, conversationId: number, i: number) {
+	const conversation = await zelliaApiRequest.call(this, 'GET', `/conversations/${conversationId}`);
+	const sender = (conversation.meta as IDataObject | undefined)?.sender as IDataObject | undefined;
+	const contactId = Number(sender?.id);
+	if (!Number.isFinite(contactId) || contactId <= 0) {
+		throw new NodeOperationError(this.getNode(), 'The conversation has no contact', {
+			itemIndex: i,
+		});
+	}
+	return contactId;
 }
 
 /**
@@ -110,21 +255,20 @@ async function findDealForConversation(
 	i: number,
 ): Promise<{ dealId: number; output?: undefined } | { dealId?: undefined; output: IDataObject }> {
 	const conversationId = this.getNodeParameter('conversationId', i) as number;
-	const conversation = await zelliaApiRequest.call(this, 'GET', `/conversations/${conversationId}`);
-	const sender = (conversation.meta as IDataObject | undefined)?.sender as IDataObject | undefined;
-	const contactId = Number(sender?.id);
-	if (!Number.isFinite(contactId) || contactId <= 0) {
-		throw new NodeOperationError(this.getNode(), 'The conversation has no contact', {
-			itemIndex: i,
-		});
-	}
+	const waitSeconds = Number(this.getNodeParameter('waitSeconds', i, 0) || 0);
+	const contactId = await contactOfConversation.call(this, conversationId, i);
+	const inPipeline = (deals: IDataObject[]) =>
+		deals.filter((deal) => Number(deal.pipeline_id) === pipelineId);
 
-	const response = await zelliaApiRequest.call(
-		this,
-		'GET',
-		`/contacts/${contactId}/pipeline_items`,
+	const deals = inPipeline(
+		await contactDeals.call(
+			this,
+			contactId,
+			{},
+			(list) => inPipeline(list).some((deal) => deal.status === 'open'),
+			waitSeconds,
+		),
 	);
-	const deals = asArray(response.payload).filter((deal) => Number(deal.pipeline_id) === pipelineId);
 
 	// Zellia allows one open deal per contact in each pipeline
 	const open = deals.find((deal) => deal.status === 'open');
@@ -138,9 +282,7 @@ async function findDealForConversation(
 		undefined,
 		{ conversation_id: conversationId },
 	);
-	const done = asArray(linked.payload).find(
-		(deal) => Number(deal.pipeline_id) === pipelineId && deal.status === target,
-	);
+	const done = inPipeline(asArray(linked.payload)).find((deal) => deal.status === target);
 	if (done) {
 		return {
 			output: {
@@ -154,6 +296,10 @@ async function findDealForConversation(
 	return { output: { result: 'no_deal', conversation_id: conversationId, contact_id: contactId } };
 }
 
+function isOpenDealConflict(error: unknown): boolean {
+	return /open deal/i.test(String((error as Error)?.message ?? ''));
+}
+
 async function createDeal(
 	this: IExecuteFunctions,
 	pipelineId: number,
@@ -164,29 +310,22 @@ async function createDeal(
 	const onOpenDeal = this.getNodeParameter('onOpenDeal', i) as string;
 	const additional = this.getNodeParameter('additionalFields', i, {}) as IDataObject;
 	const conversationId = Number(additional.conversationId ?? 0);
+	const findOpen = async () =>
+		asArray(
+			(await zelliaApiRequest.call(this, 'GET', `/contacts/${contactId}/pipeline_items`)).payload,
+		).find((deal) => Number(deal.pipeline_id) === pipelineId && deal.status === 'open');
+	const refuse = (deal: IDataObject) =>
+		new NodeOperationError(
+			this.getNode(),
+			`The contact already has an open deal (ID ${deal.id}) in this pipeline`,
+			{ itemIndex: i },
+		);
 
-	const existingList = await zelliaApiRequest.call(
-		this,
-		'GET',
-		`/contacts/${contactId}/pipeline_items`,
-	);
-	const open = asArray(existingList.payload).find(
-		(deal) => Number(deal.pipeline_id) === pipelineId && deal.status === 'open',
-	);
+	let deal: IDataObject | undefined = await findOpen();
+	let alreadyExisted = !!deal;
+	if (deal && onOpenDeal === 'error') throw refuse(deal);
 
-	let deal: IDataObject;
-	let alreadyExisted = false;
-	if (open) {
-		if (onOpenDeal === 'error') {
-			throw new NodeOperationError(
-				this.getNode(),
-				`The contact already has an open deal (ID ${open.id}) in this pipeline`,
-				{ itemIndex: i },
-			);
-		}
-		deal = open;
-		alreadyExisted = true;
-	} else {
+	if (!deal) {
 		const item: IDataObject = { contact_id: contactId };
 		if (additional.stageId) item.pipeline_stage_id = Number(additional.stageId);
 		if (Number(additional.value) > 0) item.value = Number(additional.value);
@@ -194,9 +333,19 @@ async function createDeal(
 		if (additional.assigneeId) item.assignee_id = Number(additional.assigneeId);
 		const attributes = keyValuesToObject(additional.customAttributes);
 		if (Object.keys(attributes).length) item.custom_attributes = attributes;
-		deal = unwrapPayload(
-			await zelliaApiRequest.call(this, 'POST', itemsPath, { pipeline_item: item }),
-		);
+		try {
+			deal = unwrapPayload(
+				await zelliaApiRequest.call(this, 'POST', itemsPath, { pipeline_item: item }),
+			);
+		} catch (error) {
+			// Zellia may open the deal itself (pipeline routing) between the check and the POST
+			const opened = isOpenDealConflict(error) ? await findOpen() : undefined;
+			// zelliaApiRequest already wraps errors; re-wrapping returns the same instance
+			if (!opened) throw new NodeApiError(this.getNode(), error as JsonObject);
+			if (onOpenDeal === 'error') throw refuse(opened);
+			deal = opened;
+			alreadyExisted = true;
+		}
 	}
 
 	if (conversationId > 0) {
@@ -215,37 +364,50 @@ async function findForContact(this: IExecuteFunctions, i: number): Promise<IData
 
 	if (findBy === 'conversation') {
 		const conversationId = this.getNodeParameter('conversationId', i) as number;
-		const conversation = await zelliaApiRequest.call(
-			this,
-			'GET',
-			`/conversations/${conversationId}`,
-		);
-		const sender = (conversation.meta as IDataObject | undefined)?.sender as
-			| IDataObject
-			| undefined;
-		contactId = Number(sender?.id);
-		if (!Number.isFinite(contactId) || contactId <= 0) {
-			throw new NodeOperationError(this.getNode(), 'The conversation has no contact', {
-				itemIndex: i,
-			});
-		}
+		contactId = await contactOfConversation.call(this, conversationId, i);
 		if (filters.onlyLinked) qs.conversation_id = conversationId;
 	} else {
 		contactId = this.getNodeParameter('contactId', i) as number;
 	}
 
-	const response = await zelliaApiRequest.call(
+	const matches = (deals: IDataObject[]) =>
+		deals.filter(
+			(deal) =>
+				(!filters.pipelineId || Number(deal.pipeline_id) === Number(filters.pipelineId)) &&
+				(!filters.status || deal.status === filters.status),
+		);
+	const deals = await contactDeals.call(
 		this,
-		'GET',
-		`/contacts/${contactId}/pipeline_items`,
-		undefined,
+		contactId,
 		qs,
+		(list) => matches(list).length > 0,
+		Number(filters.waitSeconds ?? 0),
 	);
-	return asArray(response.payload).filter(
-		(deal) =>
-			(!filters.pipelineId || Number(deal.pipeline_id) === Number(filters.pipelineId)) &&
-			(!filters.status || deal.status === filters.status),
-	);
+	return matches(deals);
+}
+
+async function moveToStage(
+	this: IExecuteFunctions,
+	pipelineId: number,
+	itemsPath: string,
+	dealId: number,
+	i: number,
+): Promise<IDataObject> {
+	const stageId = Number(this.getNodeParameter('stageId', i));
+	const onlyForward = this.getNodeParameter('onlyForward', i, false) as boolean;
+	const deal = await getDeal.call(this, itemsPath, dealId);
+	const currentStageId = Number(deal.pipeline_stage_id);
+	if (currentStageId === stageId) return { ...deal, result: 'already_in_stage' };
+
+	if (onlyForward) {
+		const stages = await getStages.call(this, pipelineId);
+		const position = (id: number) =>
+			Number(stages.find((stage) => Number(stage.id) === id)?.position);
+		// Won and lost come last, so a closed deal never moves back to an open stage
+		if (position(stageId) < position(currentStageId))
+			return { ...deal, result: 'skipped_backward' };
+	}
+	return { ...(await moveDeal.call(this, itemsPath, dealId, stageId)), result: 'moved' };
 }
 
 export async function executeDeal(
@@ -280,8 +442,8 @@ export async function executeDeal(
 		);
 	}
 
-	if (operation === 'markWon' || operation === 'markLost') {
-		const target = operation === 'markWon' ? 'won' : 'lost';
+	if (operation === 'markWon' || operation === 'markLost' || operation === 'registerSale') {
+		const target = operation === 'markLost' ? 'lost' : 'won';
 		let dealId: number;
 		if (this.getNodeParameter('dealLookup', i, 'dealId') === 'conversation') {
 			const found = await findDealForConversation.call(this, pipelineId, target, i);
@@ -290,6 +452,7 @@ export async function executeDeal(
 		} else {
 			dealId = this.getNodeParameter('dealId', i) as number;
 		}
+		if (operation === 'registerSale') return await registerSale.call(this, itemsPath, dealId, i);
 		return operation === 'markWon'
 			? await markWon.call(this, pipelineId, itemsPath, dealId, i)
 			: await markLost.call(this, pipelineId, itemsPath, dealId, i);
@@ -308,17 +471,21 @@ export async function executeDeal(
 			if (fields.currency) item.currency = String(fields.currency).trim().toUpperCase();
 			if (fields.assigneeId) item.assignee_id = Number(fields.assigneeId);
 			const attributes = keyValuesToObject(fields.customAttributes);
-			if (Object.keys(attributes).length) item.custom_attributes = attributes;
+			if (Object.keys(attributes).length) {
+				item.custom_attributes = await attributesToSave.call(
+					this,
+					itemsPath,
+					dealId,
+					attributes,
+					fields.replaceAttributes === true,
+				);
+			}
 			if (!Object.keys(item).length) {
 				throw new NodeOperationError(this.getNode(), 'Add at least one field to update', {
 					itemIndex: i,
 				});
 			}
-			return unwrapPayload(
-				await zelliaApiRequest.call(this, 'PATCH', `${itemsPath}/${dealId}`, {
-					pipeline_item: item,
-				}),
-			);
+			return await patchDeal.call(this, itemsPath, dealId, item, i);
 		}
 
 		case 'delete':
@@ -326,12 +493,7 @@ export async function executeDeal(
 			return { id: dealId, deleted: true };
 
 		case 'moveToStage':
-			return await moveDeal.call(
-				this,
-				itemsPath,
-				dealId,
-				Number(this.getNodeParameter('stageId', i)),
-			);
+			return await moveToStage.call(this, pipelineId, itemsPath, dealId, i);
 
 		case 'linkConversation': {
 			const conversationId = this.getNodeParameter('conversationId', i) as number;

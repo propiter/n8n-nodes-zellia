@@ -15,7 +15,7 @@ class HttpError extends Error {
  * routes: { 'GET /pipelines/2/stages': response | (options) => response }
  * Paths are relative to /api/v1/accounts/7. A thrown HttpError simulates an API failure.
  */
-function createContext({ params = {}, routes = {}, binary, downloads = {} } = {}) {
+function createContext({ params = {}, routes = {}, binary, downloads = {}, credentials = {} } = {}) {
 	const calls = [];
 	const prefix = `/api/v1/accounts/${CREDENTIALS.accountId}`;
 	const staticData = {};
@@ -29,7 +29,7 @@ function createContext({ params = {}, routes = {}, binary, downloads = {} } = {}
 			return typeof indexOrFallback === 'number' ? fallback : indexOrFallback;
 		},
 		getCurrentNodeParameter: (name) => params[name],
-		getCredentials: async () => CREDENTIALS,
+		getCredentials: async (type) => (type === 'zelliaApi' || !type ? { ...CREDENTIALS, ...credentials } : credentials[type] || {}),
 		getNode: () => ({ name: 'Zellia', type: 'n8n-nodes-zellia.zellia', typeVersion: 1, parameters: {} }),
 		getWorkflow: () => ({ name: 'Test workflow' }),
 		getNodeWebhookUrl: () => 'https://n8n.test/webhook/abc/webhook',

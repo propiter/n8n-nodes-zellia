@@ -44,6 +44,15 @@ export class ZelliaApi implements ICredentialType {
 				'Agent token (Profile Settings → Access Token) or agent bot token (Settings → Bots). Bot tokens can only use some operations.',
 			required: true,
 		},
+		{
+			displayName: 'Default Country Code',
+			name: 'defaultCountryCode',
+			type: 'string',
+			default: '',
+			placeholder: '57',
+			description:
+				'Optional. Added to phone numbers written without a country code, such as 300 123 4567. Leave empty to only add the + sign.',
+		},
 	];
 
 	authenticate: IAuthenticateGeneric = {

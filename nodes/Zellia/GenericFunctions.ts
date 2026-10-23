@@ -23,6 +23,7 @@ const BOT_FORBIDDEN = 'Access to this endpoint is not authorized for bots';
 interface ZelliaCredentials {
 	baseUrl: string;
 	accountId: number;
+	defaultCountryCode: string;
 }
 
 export async function getZelliaCredentials(this: ZelliaContext): Promise<ZelliaCredentials> {
@@ -30,6 +31,7 @@ export async function getZelliaCredentials(this: ZelliaContext): Promise<ZelliaC
 	return {
 		baseUrl: String(credentials.baseUrl ?? '').replace(/\/+$/, ''),
 		accountId: Number(credentials.accountId),
+		defaultCountryCode: String(credentials.defaultCountryCode ?? '').replace(/\D/g, ''),
 	};
 }
 
@@ -102,6 +104,19 @@ export function describeZelliaError(error: unknown): { message?: string; descrip
 			description:
 				detail ??
 				'Check the IDs. Conversation IDs are the number shown in the Zellia URL, not an internal ID.',
+		};
+	}
+	if (status === 429) {
+		return {
+			message: 'Zellia received too many requests',
+			description:
+				'Wait a moment and try again. For loops, add a Wait node or turn on Retry On Fail with a pause.',
+		};
+	}
+	if (status !== undefined && status >= 500) {
+		return {
+			message: 'Zellia is not available right now',
+			description: detail ?? `Zellia answered HTTP ${status}. Try again in a few minutes.`,
 		};
 	}
 	return detail ? { message: detail } : {};
@@ -200,11 +215,22 @@ export function unwrapPayload(response: IDataObject): IDataObject {
 		: response;
 }
 
-/** Turns "+57 300-123 4567" into "+573001234567"; Zellia stores phones in E.164. */
-export function normalizePhone(raw: string): string {
-	const trimmed = raw.trim();
-	const digits = trimmed.replace(/\D/g, '');
+/**
+ * Turns a phone into E.164, which is the only format Zellia accepts.
+ * "+57 300-123 4567" and "0057 300 123 4567" keep their code. With a default country code,
+ * a national number such as "300 123 4567" gets it; without one, only the + is added.
+ */
+export function normalizePhone(raw: string, defaultCountryCode = ''): string {
+	const trimmed = String(raw ?? '').trim();
+	let digits = trimmed.replace(/\D/g, '');
 	if (!digits) return '';
+	if (trimmed.startsWith('+')) return `+${digits}`;
+	if (digits.startsWith('00')) return `+${digits.slice(2)}`;
+	const code = String(defaultCountryCode ?? '').replace(/\D/g, '');
+	// A number that already starts with the code and is long enough to hold one is kept
+	if (code && !(digits.startsWith(code) && digits.length >= code.length + 8)) {
+		digits = `${code}${digits}`;
+	}
 	return `+${digits}`;
 }
 

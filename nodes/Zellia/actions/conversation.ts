@@ -4,6 +4,7 @@ import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 import {
 	asArray,
 	findContact,
+	getZelliaCredentials,
 	keyValuesToObject,
 	normalizePhone,
 	parseLabels,
@@ -100,7 +101,8 @@ async function getMessages(this: IExecuteFunctions, conversationId: number, i: n
 
 async function startOutbound(this: IExecuteFunctions, i: number): Promise<IDataObject> {
 	const inboxId = Number(this.getNodeParameter('inboxId', i));
-	const phone = normalizePhone(this.getNodeParameter('phone', i) as string);
+	const { defaultCountryCode } = await getZelliaCredentials.call(this);
+	const phone = normalizePhone(this.getNodeParameter('phone', i) as string, defaultCountryCode);
 	if (phone.length < 8) {
 		throw new NodeOperationError(this.getNode(), 'The phone number is not valid', {
 			itemIndex: i,

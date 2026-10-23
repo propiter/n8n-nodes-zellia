@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-zellia",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "n8n nodes for Zellia: send messages and manage conversations, contacts and deals, and trigger workflows from Zellia events",
   "license": "MIT",
   "homepage": "https://github.com/propiter/n8n-nodes-zellia#readme",
@@ -37,7 +37,8 @@
     "n8nNodesApiVersion": 1,
     "strict": false,
     "credentials": [
-      "dist/credentials/ZelliaApi.credentials.js"
+      "dist/credentials/ZelliaApi.credentials.js",
+      "dist/credentials/ZelliaWebhookSecretApi.credentials.js"
     ],
     "nodes": [
       "dist/nodes/Zellia/Zellia.node.js",
