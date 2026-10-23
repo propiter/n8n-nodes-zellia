@@ -13,7 +13,7 @@ export class ZelliaApi implements ICredentialType {
 
 	icon: Icon = { light: 'file:zellia.svg', dark: 'file:zellia.dark.svg' };
 
-	documentationUrl = 'https://www.npmjs.com/package/n8n-nodes-zellia';
+	documentationUrl = 'https://github.com/propiter/n8n-nodes-zellia#readme';
 
 	properties: INodeProperties[] = [
 		{

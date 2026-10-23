@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "n8n nodes for Zellia: send messages and manage conversations, contacts and deals, and trigger workflows from Zellia events",
   "license": "MIT",
-  "homepage": "https://www.npmjs.com/package/n8n-nodes-zellia",
+  "homepage": "https://github.com/propiter/n8n-nodes-zellia#readme",
   "keywords": [
     "n8n-community-node-package",
     "n8n",
@@ -18,7 +18,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/whitelabel-lat/n8n-nodes-zellia.git"
+    "url": "https://github.com/propiter/n8n-nodes-zellia.git"
   },
   "scripts": {
     "build": "n8n-node build",
@@ -53,5 +53,8 @@
   },
   "peerDependencies": {
     "n8n-workflow": "*"
+  },
+  "bugs": {
+    "url": "https://github.com/propiter/n8n-nodes-zellia/issues"
   }
 }
