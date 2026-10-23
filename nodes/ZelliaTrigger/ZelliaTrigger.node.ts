@@ -97,7 +97,7 @@ export class ZelliaTrigger implements INodeType {
 			},
 			{
 				displayName:
-					'In Zellia, create an automation rule (for example "Deal stage changed"), add the action "Send webhook event" and paste the production URL of this node. If you set a secret token below, add ?token=YOUR_TOKEN to the end of the URL.',
+					'In Zellia, create an automation rule (for example "Deal stage changed"), add the action "Send webhook event" and paste the production URL of this node. Then add ?token= and the secret token below to the end of the URL.',
 				name: 'automationNotice',
 				type: 'notice',
 				default: '',
@@ -140,10 +140,11 @@ export class ZelliaTrigger implements INodeType {
 				name: 'automationToken',
 				type: 'string',
 				typeOptions: { password: true },
+				required: true,
 				default: '',
 				displayOptions: { show: { source: ['automation'] } },
 				description:
-					'Optional. When set, requests without ?token= and this value are rejected, because automation rules do not sign their requests.',
+					'Long random value. Add ?token= and this value to the URL in the Zellia rule. Automation rules do not sign their requests, so requests without the right token are rejected.',
 			},
 			{
 				displayName: 'Message Filters',
@@ -292,7 +293,8 @@ export class ZelliaTrigger implements INodeType {
 		if (source === 'automation') {
 			const token = this.getNodeParameter('automationToken', '') as string;
 			const received = String((this.getQueryData() as IDataObject).token ?? '');
-			if (token && !safeEqual(received, token)) return reject(401, 'Invalid token');
+			// Fail closed: an empty token must not open the URL to anyone
+			if (!token || !safeEqual(received, token)) return reject(401, 'Invalid token');
 		} else {
 			// Zellia always signs account webhooks, so a missing secret means the registration is broken
 			const { webhookSecret } = this.getWorkflowStaticData('node') as TriggerStaticData;

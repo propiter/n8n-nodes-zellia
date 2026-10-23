@@ -170,6 +170,12 @@ describe('webhook filtering', () => {
 		assert.equal((await receive({ body, params, query: { token: 'nope' } })).response.status, 401);
 		assert.equal((await receive({ body, params, query: { token: 's3cret' } })).items.length, 1);
 	});
+
+	test('automation source rejects everything when no token is set', async () => {
+		const body = { event: 'automation_event.pipeline_stage_changed', deal: { id: 1 } };
+		const params = { source: 'automation', automationToken: '' };
+		assert.equal((await receive({ body, params, query: {} })).response.status, 401);
+	});
 });
 
 describe('simplify', () => {

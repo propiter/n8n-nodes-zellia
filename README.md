@@ -99,7 +99,7 @@ Use this source for deal stage changes. Zellia does not offer deal events as acc
 2. Add the action **Send webhook event**.
 3. Paste the production URL of the node into the action.
 
-Automation rules do not sign their requests. To block requests from other sources, set a **Secret Token** in the node and add `?token=YOUR_TOKEN` to the URL in the rule.
+Automation rules do not sign their requests, so the node requires a **Secret Token**. Use a long random value, and add `?token=YOUR_TOKEN` to the URL in the rule. Requests without the right token get a 401.
 
 ### Filters and output
 
