@@ -2,6 +2,8 @@ import type { IDataObject, IExecuteFunctions } from 'n8n-workflow';
 import { NodeOperationError } from 'n8n-workflow';
 
 import { asArray, buildMultipart, zelliaApiRequest } from '../GenericFunctions';
+import type { DownloadedFile } from './download';
+import { downloadFile } from './download';
 
 function collectionValues(ctx: IExecuteFunctions, name: string, i: number): IDataObject[] {
 	const collection = ctx.getNodeParameter(name, i, {}) as IDataObject;
@@ -123,6 +125,23 @@ export function buildMessageBody(this: IExecuteFunctions, i: number): IDataObjec
 	return body;
 }
 
+/** The file to attach, from a binary field or downloaded from a URL. */
+async function readAttachment(this: IExecuteFunctions, i: number): Promise<DownloadedFile> {
+	const fileSource = this.getNodeParameter('fileSource', i, 'binary') as string;
+	if (fileSource === 'url') {
+		const url = String(this.getNodeParameter('fileUrl', i) ?? '').trim();
+		const fileName = String(this.getNodeParameter('fileName', i, '') ?? '');
+		return await downloadFile.call(this, url, i, fileName);
+	}
+	const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i) as string;
+	const binaryData = this.helpers.assertBinaryData(i, binaryPropertyName);
+	return {
+		data: await this.helpers.getBinaryDataBuffer(i, binaryPropertyName),
+		fileName: binaryData.fileName ?? `file.${binaryData.fileExtension ?? 'bin'}`,
+		mimeType: binaryData.mimeType || 'application/octet-stream',
+	};
+}
+
 export async function postMessage(
 	this: IExecuteFunctions,
 	conversationId: number,
@@ -148,21 +167,14 @@ export async function executeMessage(
 	}
 
 	if (operation === 'sendAttachment') {
-		const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i) as string;
-		const binaryData = this.helpers.assertBinaryData(i, binaryPropertyName);
-		const data = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
+		const file = await readAttachment.call(this, i);
 		const fields: Record<string, string> = {
 			message_type: 'outgoing',
 			private: String(this.getNodeParameter('private', i, false) as boolean),
 		};
 		const caption = String(this.getNodeParameter('caption', i, '') ?? '');
 		if (caption) fields.content = caption;
-		const { body, contentType } = buildMultipart(fields, {
-			field: 'attachments[]',
-			fileName: binaryData.fileName ?? `file.${binaryData.fileExtension ?? 'bin'}`,
-			mimeType: binaryData.mimeType || 'application/octet-stream',
-			data,
-		});
+		const { body, contentType } = buildMultipart(fields, { field: 'attachments[]', ...file });
 		return await zelliaApiRequest.call(
 			this,
 			'POST',

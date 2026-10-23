@@ -19,7 +19,7 @@ export const messageOperations: INodeProperties[] = [
 			{
 				name: 'Send Attachment',
 				value: 'sendAttachment',
-				description: 'Send a file from a binary property',
+				description: 'Send a file from a binary field or from a public URL',
 				action: 'Send an attachment',
 			},
 		],
@@ -39,12 +39,57 @@ export const messageFields: INodeProperties[] = [
 	},
 	...messageContentFields({ resource: ['message'], operation: ['send'] }),
 	{
+		displayName: 'File Source',
+		name: 'fileSource',
+		type: 'options',
+		noDataExpression: true,
+		options: [
+			{
+				name: 'Binary Field',
+				value: 'binary',
+				description: 'A file that an earlier node read or downloaded',
+			},
+			{
+				name: 'URL',
+				value: 'url',
+				description: 'A public link. The node downloads the file and uploads it to Zellia.',
+			},
+		],
+		default: 'binary',
+		displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
+	},
+	{
+		displayName: 'File URL',
+		name: 'fileUrl',
+		type: 'string',
+		required: true,
+		default: '',
+		placeholder: 'https://example.com/photo.png',
+		displayOptions: {
+			show: { resource: ['message'], operation: ['sendAttachment'], fileSource: ['url'] },
+		},
+		description: 'Public http(s) link to an image, video, audio or document, up to 40 MB',
+	},
+	{
+		displayName: 'File Name',
+		name: 'fileName',
+		type: 'string',
+		default: '',
+		placeholder: 'photo.png',
+		displayOptions: {
+			show: { resource: ['message'], operation: ['sendAttachment'], fileSource: ['url'] },
+		},
+		description: 'Optional. Defaults to the name in the URL.',
+	},
+	{
 		displayName: 'Input Binary Field',
 		name: 'binaryPropertyName',
 		type: 'string',
 		required: true,
 		default: 'data',
-		displayOptions: { show: { resource: ['message'], operation: ['sendAttachment'] } },
+		displayOptions: {
+			show: { resource: ['message'], operation: ['sendAttachment'], fileSource: ['binary'] },
+		},
 		hint: 'The name of the input binary field containing the file to send',
 	},
 	{

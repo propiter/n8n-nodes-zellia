@@ -155,6 +155,48 @@ describe('message body', () => {
 	});
 });
 
+describe('attachments', () => {
+	const route = { 'POST /conversations/9/messages': (call) => ({ id: 77, size: call.body.length }) };
+	const base = { resource: 'message', operation: 'sendAttachment', conversationId: 9, caption: 'Precio: $1', private: false };
+
+	test('a URL is downloaded and uploaded with its name and type', async () => {
+		const url = 'https://img.test/llantas/1010405.png?v=1';
+		const { items, calls } = await execute({ ...base, fileSource: 'url', fileUrl: url }, route, {
+			downloads: { [url]: { status: 200, body: Buffer.from('PNGDATA'), headers: { 'content-type': 'image/png' } } },
+		});
+		const upload = calls.find((call) => call.path === '/conversations/9/messages');
+		const text = upload.body.toString();
+		assert.equal(calls[0].download, url);
+		assert.match(text, /filename="1010405.png"\r\nContent-Type: image\/png\r\n\r\nPNGDATA/);
+		assert.match(text, /name="content"\r\n\r\nPrecio: \$1/);
+		assert.match(upload.headers['Content-Type'], /^multipart\/form-data; boundary=/);
+		assert.equal(items[0].id, 77);
+	});
+
+	test('the type falls back to the extension and the name can be set', async () => {
+		const url = 'https://img.test/a/b';
+		const { calls } = await execute({ ...base, fileSource: 'url', fileUrl: url, fileName: 'llanta.jpg' }, route, {
+			downloads: { [url]: { status: 200, body: Buffer.from('JPG'), headers: { 'content-type': 'application/octet-stream' } } },
+		});
+		assert.match(calls.at(-1).body.toString(), /filename="llanta.jpg"\r\nContent-Type: image\/jpeg/);
+	});
+
+	test('a failed download stops with a clear error and uploads nothing', async () => {
+		const url = 'https://img.test/missing.png';
+		await assert.rejects(
+			execute({ ...base, fileSource: 'url', fileUrl: url }, route, { downloads: { [url]: { status: 404 } } }),
+			/Could not download the file \(HTTP 404\)/,
+		);
+	});
+
+	test('a binary field still works as before', async () => {
+		const { calls } = await execute({ ...base, binaryPropertyName: 'data' }, route, {
+			binary: { meta: { fileName: 'f.pdf', mimeType: 'application/pdf' }, data: Buffer.from('PDF') },
+		});
+		assert.match(calls[0].body.toString(), /filename="f.pdf"\r\nContent-Type: application\/pdf\r\n\r\nPDF/);
+	});
+});
+
 describe('conversation labels', () => {
 	const routes = (current) => ({
 		'GET /conversations/5/labels': { payload: current },

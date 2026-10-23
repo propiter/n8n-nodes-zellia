@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Message → Send Attachment: new **File Source** option. Choose **URL** to send a file from a public link. The node downloads the file and uploads it to Zellia, so you do not need an HTTP Request node first. It also works when the node is used as an AI Agent tool. **Binary Field** stays the default, so existing nodes do not change.
+
 ## 0.1.0
 
 First release.

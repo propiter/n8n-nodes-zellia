@@ -15,7 +15,7 @@ class HttpError extends Error {
  * routes: { 'GET /pipelines/2/stages': response | (options) => response }
  * Paths are relative to /api/v1/accounts/7. A thrown HttpError simulates an API failure.
  */
-function createContext({ params = {}, routes = {}, binary } = {}) {
+function createContext({ params = {}, routes = {}, binary, downloads = {} } = {}) {
 	const calls = [];
 	const prefix = `/api/v1/accounts/${CREDENTIALS.accountId}`;
 	const staticData = {};
@@ -48,6 +48,13 @@ function createContext({ params = {}, routes = {}, binary } = {}) {
 			},
 			returnJsonArray: (data) => (Array.isArray(data) ? data : [data]).map((json) => ({ json })),
 			constructExecutionMetaData: (items, { itemData }) => items.map((item) => ({ ...item, pairedItem: itemData })),
+			// Plain downloads (no Zellia auth). downloads: { url: { status, body, headers } }
+			httpRequest: async (options) => {
+				calls.push({ method: options.method, download: options.url });
+				const file = downloads[options.url];
+				if (!file || file.status >= 400) throw Object.assign(new Error('download failed'), { httpCode: String(file ? file.status : 404) });
+				return { body: file.body, headers: file.headers || {}, statusCode: 200 };
+			},
 			assertBinaryData: () => binary.meta,
 			getBinaryDataBuffer: async () => binary.data,
 		},
